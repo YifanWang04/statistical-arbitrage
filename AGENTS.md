@@ -15,10 +15,10 @@
 
 ### 2.1 主要资料
 
-- 主论文：`Correlation_Matrix_Clustering_for_Statistical_Arbitrage_Portfolios_CarteaAlvaro_JinQi_CucuringuMihai.pdf`
-- 用户笔记：`Markdown_Notes.zip` 中的 Markdown 文件。
+- 主论文：`references/Correlation_Matrix_Clustering_for_Statistical_Arbitrage_Portfolios_CarteaAlvaro_JinQi_CucuringuMihai.pdf`
+- 用户笔记：`references/Markdown_Notes.zip` 中的 Markdown 文件。
 - 作者聚类示例：<https://github.com/maxclchen/Correlation-Matrix-Clustering-for-Statistical-Arbitrage-Portfolios>
-- 次级参考：本目录中的扩展论文和 PPT。
+- 次级参考：`references/` 中的扩展论文和 PPT。
 
 主论文是方法基线；用户笔记帮助理解目标，但可能包含简化、疑问或笔误；作者代码只覆盖部分聚类示例，不是完整策略实现；扩展论文中的机器学习、Kelly sizing、交易成本优化等只能作为后续改进参考。
 

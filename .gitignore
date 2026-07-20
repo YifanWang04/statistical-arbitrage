@@ -1,0 +1,45 @@
+# Python environments and bytecode
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging artifacts
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Test, coverage, and type-checker caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Notebook, editor, and operating-system files
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# Project-generated data and artifacts
+/data/*.duckdb
+/data/*.duckdb.*
+/data/*.tmp
+/tmp/
+/outputs/

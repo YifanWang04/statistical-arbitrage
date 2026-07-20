@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stat-arb-data"
+version = "0.1.0"
+description = "Yahoo Finance data ingestion for the statistical-arbitrage replication project"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.4,<2",
+    "openpyxl>=3.1,<4",
+    "pandas>=2.2,<3",
+    "yfinance>=0.2.54,<2",
+]
+
+[project.scripts]
+stat-arb-data = "stat_arb_data.cli:main"
+stat-arb-preprocessing = "stat_arb_preprocessing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
