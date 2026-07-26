@@ -160,3 +160,94 @@ DuckDB 按需缓存：
 Excel 包含 `Parameters_QC`、`Beta_Used`、`Stock_Returns`、`Residual_Matrix`、
 `Correlation_Matrix` 和 `Excluded_Stocks`。输出文件已存在时默认拒绝覆盖；确认覆盖时增加
 `--replace`。也可以在 IDE 中修改并运行 `scripts/export_preprocessing_snapshot.py`。
+
+## 第三阶段：累计方差解释率确定 K
+
+本阶段按照论文动态 K 的设定，使用指定日期之前 20 个交易日的市场残差收益构造独立的 Pearson
+相关矩阵。这个窗口只用于确定 K；第二阶段和后续实际图聚类仍使用 5 日市场残差相关矩阵。
+20 日 Pearson 相关矩阵的理论秩最多为 19，与论文动态方法通常选择 10–20 个 clusters 的结果
+范围一致。
+
+对相关矩阵的特征值从大到小排序，默认取累计解释 90% 总方差所需的最少特征值数量：
+
+```text
+K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= P }
+```
+
+阈值 `P` 默认是 `0.90`，可以在 `(0, 1]` 范围内调整。计算使用指定日期的内存快照，不保存
+相关矩阵、特征值或 K，也不新增 DuckDB 结果表。
+
+### 导出指定日期的 K 计算过程
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_cluster_count export `
+  --database data\yahoo_market_data.duckdb `
+  --as-of-date 2026-07-17 `
+  --cluster-count-estimation-window 20 `
+  --variance-threshold 0.90 `
+  --output outputs\cluster_count\cluster_count_2026-07-17.xlsx
+```
+
+`--cluster-count-estimation-window` 默认是论文基线的 `20`，可以显式传入其他值用于核对；它不会修改预处理
+或实际图聚类使用的 5 日默认窗口。
+
+Excel 只包含 `Eigenvalues` 和 `K_Calculation`。前者列出原始特征值、实际用于累计计算的特征值
+和数值调整；后者记录输入参数、程序结果、Excel 复核公式、逐步累计解释率和最终 K。输出文件已
+存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。也可以在 IDE 中修改并运行
+`scripts/export_cluster_count.py`。
+
+## 第四阶段：SPONGE_sym 股票聚类
+
+本阶段对同一个 `as-of-date=T` 使用两套相互独立的历史窗口：
+
+- 前 20 个交易日的市场残差相关矩阵只用于第三阶段的 90% 累计方差规则并确定 K；
+- 前 5 个交易日的市场残差相关矩阵作为 SPONGE_sym 的 signed adjacency matrix。
+
+两个窗口都严格截止到 `T` 之前的最后一个交易日。股票必须满足各自窗口的完整数据规则，因此用于
+确定 K 和用于实际聚类的股票数量可以不同；K 是从 20 日窗口得到的标量，随后应用到 5 日股票集合。
+
+### 当前暂用的作者代码兼容口径
+
+主论文第 2.1.3 节写明应取 K 个最小广义特征向量，并直接在 K 维空间执行 k-means++。作者示例
+notebook 调用的旧版 SigNet 实际默认取 K-1 个特征向量，并在聚类前执行 `v / lambda`。这会改变
+embedding 中的距离，因此两种口径可能产生不同 clusters。
+
+本阶段根据已确认的临时决定使用 notebook/SigNet 口径，计算版本为
+`sponge_sym_signet_compat_v1`：
+
+```text
+eigenvector_count = K - 1
+embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
+```
+
+该结果不是论文文字所描述的 K 维原始特征向量基线。未来切换到论文口径时必须使用新的计算版本，
+并将两种结果作为不同实验进行比较，不能静默替换或混合。
+
+作者 notebook 没有固定 LOBPCG 或 KMeans 的随机状态，也没有显式传入 `n_init`。为满足本项目的
+可复现要求，当前显式使用 `seed=0`、`n_init=10`；两者都会写入程序结果和 Excel。显式指定
+`n_init` 也避免 scikit-learn 从 1.4 起将默认值改为 `"auto"` 后产生版本漂移。
+
+### 导出指定日期的聚类结果
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_clustering export `
+  --database data\yahoo_market_data.duckdb `
+  --as-of-date 2026-07-17 `
+  --clustering-correlation-window 5 `
+  --cluster-count-estimation-window 20 `
+  --variance-threshold 0.90 `
+  --tau-positive 1 `
+  --tau-negative 1 `
+  --seed 0 `
+  --n-init 10 `
+  --output outputs\clustering\sponge_sym_clusters_2026-07-17.xlsx
+```
+
+也可以在 IDE 中修改并运行 `scripts/export_clustering.py`。默认的
+`tau-positive=1` 和 `tau-negative=1` 来自作者 notebook；前者是广义特征问题分母的正则项
+\(\tau^+\)，后者是分子的正则项 \(\tau^-\)。
+
+Excel 包含 `Parameters_QC`、`Eigenvalues`、`Spectral_Embedding` 和
+`Cluster_Assignments`。cluster ID 与作者代码一致使用从 0 开始的标签；标签数字本身没有跨日期
+的经济含义。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。计算在内存中完成，不新增
+clustering 或 cluster-count DuckDB 结果表。

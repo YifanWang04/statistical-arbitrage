@@ -5,13 +5,15 @@ from pathlib import Path
 
 
 DEFAULT_DATABASE = Path("data/yahoo_market_data.duckdb")
+DEFAULT_CLUSTERING_CORRELATION_WINDOW = 5
 
 
 @dataclass(frozen=True)
 class PreprocessingConfig:
     database_path: Path = DEFAULT_DATABASE
     beta_window: int = 60
-    correlation_window: int = 5
+    # Paper w: residual-return lookback used by the actual graph clustering.
+    correlation_window: int = DEFAULT_CLUSTERING_CORRELATION_WINDOW
     beta_alignment: str = "include_current_session"
     missing_policy: str = "complete_window"
     calculation_version: str = "paper_baseline_v1"

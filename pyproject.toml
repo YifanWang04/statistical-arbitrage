@@ -11,12 +11,16 @@ dependencies = [
     "duckdb>=1.4,<2",
     "openpyxl>=3.1,<4",
     "pandas>=2.2,<3",
+    "scikit-learn>=1.5,<2",
+    "scipy>=1.13,<2",
     "yfinance>=0.2.54,<2",
 ]
 
 [project.scripts]
 stat-arb-data = "stat_arb_data.cli:main"
 stat-arb-preprocessing = "stat_arb_preprocessing.cli:main"
+stat-arb-cluster-count = "stat_arb_cluster_count.cli:main"
+stat-arb-clustering = "stat_arb_clustering.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
