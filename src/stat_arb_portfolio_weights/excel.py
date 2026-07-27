@@ -94,6 +94,7 @@ def _write_summary(sheet: Worksheet, result: PortfolioWeightResult) -> None:
         (None, None),
         ("Method", None),
         ("Return input", "raw stock price returns"),
+        ("Position direction", "long only: previous losers; winners stay at zero"),
         ("Cluster allocation", "equal 1/K share of total gross exposure"),
         (
             "Inactive cluster",
@@ -109,7 +110,7 @@ def _write_summary(sheet: Worksheet, result: PortfolioWeightResult) -> None:
     for row in rows:
         sheet.append(row)
 
-    for row in (2, 11, 21, 26):
+    for row in (2, 11, 21, 27):
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
         cell = sheet.cell(row, 1)
         cell.fill = SECTION_FILL
@@ -129,15 +130,15 @@ def _write_summary(sheet: Worksheet, result: PortfolioWeightResult) -> None:
     qc_cell.fill = OK_FILL if qc_cell.value == "OK" else CHECK_FILL
 
     for row in range(3, sheet.max_row + 1):
-        if sheet.cell(row, 1).value is not None and row not in (11, 21, 26):
+        if sheet.cell(row, 1).value is not None and row not in (11, 21, 27):
             sheet.cell(row, 1).font = Font(bold=True)
 
     sheet.sheet_view.showGridLines = False
     sheet.freeze_panes = "A3"
     sheet.column_dimensions["A"].width = 32
     sheet.column_dimensions["B"].width = 52
-    sheet["B23"].alignment = Alignment(wrap_text=True, vertical="top")
     sheet["B24"].alignment = Alignment(wrap_text=True, vertical="top")
+    sheet["B25"].alignment = Alignment(wrap_text=True, vertical="top")
 
 
 def _write_cluster_allocations(
@@ -268,7 +269,8 @@ def _overall_qc_status(result: PortfolioWeightResult) -> str:
         quality.maximum_active_cluster_local_net_error < QC_TOLERANCE,
         quality.maximum_active_cluster_local_gross_error < QC_TOLERANCE,
         quality.maximum_cluster_portfolio_gross_error < QC_TOLERANCE,
-        abs(quality.net_exposure) < QC_TOLERANCE,
+        abs(quality.short_exposure) < QC_TOLERANCE,
+        abs(quality.net_exposure - quality.gross_exposure) < QC_TOLERANCE,
         abs(quality.gross_exposure - expected_invested_gross) < QC_TOLERANCE,
         abs(
             quality.gross_exposure

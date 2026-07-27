@@ -30,7 +30,7 @@ from tests.test_preprocessing import build_test_database
 
 
 class PortfolioWeightCalculationTests(unittest.TestCase):
-    def test_equal_weights_within_each_side_and_equal_cluster_gross(self) -> None:
+    def test_equal_long_only_weights_and_equal_cluster_gross(self) -> None:
         selection = make_selection(
             labels=(0, 0, 0, 0, 1, 1, 1, 1),
             classifications=(
@@ -49,24 +49,25 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
 
         np.testing.assert_allclose(
             result.local_weights,
-            (-1.0, 0.5, 0.5, 0.0, -0.5, -0.5, 1.0, 0.0),
+            (0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0),
         )
         np.testing.assert_allclose(
             result.portfolio_weights,
-            (-0.25, 0.125, 0.125, 0.0, -0.125, -0.125, 0.25, 0.0),
+            (0.0, 0.25, 0.25, 0.0, 0.0, 0.0, 0.5, 0.0),
         )
         self.assertEqual(result.quality.active_cluster_count, 2)
         self.assertEqual(result.quality.inactive_cluster_count, 0)
-        self.assertAlmostEqual(result.quality.long_exposure, 0.5)
-        self.assertAlmostEqual(result.quality.short_exposure, -0.5)
-        self.assertAlmostEqual(result.quality.net_exposure, 0.0)
+        self.assertAlmostEqual(result.quality.long_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.short_exposure, 0.0)
+        self.assertAlmostEqual(result.quality.net_exposure, 1.0)
         self.assertAlmostEqual(result.quality.gross_exposure, 1.0)
         self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.0)
         for allocation in result.cluster_allocations:
             self.assertTrue(allocation.is_active)
             self.assertAlmostEqual(allocation.local_long_exposure, 1.0)
-            self.assertAlmostEqual(allocation.local_short_exposure, -1.0)
-            self.assertAlmostEqual(allocation.local_gross_exposure, 2.0)
+            self.assertAlmostEqual(allocation.local_short_exposure, 0.0)
+            self.assertAlmostEqual(allocation.local_net_exposure, 1.0)
+            self.assertAlmostEqual(allocation.local_gross_exposure, 1.0)
             self.assertAlmostEqual(allocation.portfolio_gross_exposure, 0.5)
 
     def test_inactive_cluster_stays_uninvested_without_redistribution(self) -> None:
@@ -77,10 +78,10 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
 
         result = assign_portfolio_weights(selection)
 
-        np.testing.assert_allclose(result.local_weights, (-1.0, 1.0, 0.0))
+        np.testing.assert_allclose(result.local_weights, (0.0, 1.0, 0.0))
         np.testing.assert_allclose(
             result.portfolio_weights,
-            (-0.25, 0.25, 0.0),
+            (0.0, 0.5, 0.0),
         )
         self.assertTrue(result.cluster_allocations[0].is_active)
         self.assertFalse(result.cluster_allocations[1].is_active)
@@ -91,7 +92,7 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
             0.5,
         )
 
-    def test_single_sided_cluster_is_inactive(self) -> None:
+    def test_winner_only_cluster_is_inactive(self) -> None:
         selection = make_selection(
             labels=(0, 0, 0),
             classifications=(PREVIOUS_WINNER, NEUTRAL, NEUTRAL),
@@ -104,6 +105,24 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
         self.assertEqual(result.quality.active_cluster_count, 0)
         self.assertEqual(result.quality.inactive_cluster_count, 1)
         self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 1.0)
+
+    def test_loser_only_cluster_is_active(self) -> None:
+        selection = make_selection(
+            labels=(0, 0, 0),
+            classifications=(PREVIOUS_LOSER, NEUTRAL, NEUTRAL),
+        )
+
+        result = assign_portfolio_weights(selection)
+
+        np.testing.assert_allclose(result.local_weights, (1.0, 0.0, 0.0))
+        np.testing.assert_allclose(result.portfolio_weights, (1.0, 0.0, 0.0))
+        self.assertEqual(result.quality.active_cluster_count, 1)
+        self.assertEqual(result.quality.inactive_cluster_count, 0)
+        self.assertAlmostEqual(result.quality.long_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.short_exposure, 0.0)
+        self.assertAlmostEqual(result.quality.net_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.gross_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.0)
 
     def test_rejects_malformed_stock_selection_results(self) -> None:
         selection = make_selection(
@@ -182,7 +201,11 @@ class PortfolioWeightIntegrationTests(unittest.TestCase):
                 result.stock_selection_result.window_end,
                 dates[-2].date(),
             )
-            self.assertAlmostEqual(result.quality.net_exposure, 0.0)
+            self.assertAlmostEqual(result.quality.short_exposure, 0.0)
+            self.assertAlmostEqual(
+                result.quality.net_exposure,
+                result.quality.gross_exposure,
+            )
             self.assertAlmostEqual(
                 result.quality.gross_exposure
                 + result.quality.uninvested_gross_exposure,
@@ -247,6 +270,13 @@ class PortfolioWeightIntegrationTests(unittest.TestCase):
                     2,
                 ).value,
                 "equal 1/K share of total gross exposure",
+            )
+            self.assertEqual(
+                summary.cell(
+                    summary_rows["Position direction"],
+                    2,
+                ).value,
+                "long only: previous losers; winners stay at zero",
             )
             self.assertEqual(
                 summary.cell(summary_rows["Overall QC"], 2).value,

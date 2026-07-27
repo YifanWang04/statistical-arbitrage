@@ -16,7 +16,7 @@ from .models import (
 )
 
 
-CALCULATION_VERSION = "equal_cluster_gross_weight_v1"
+CALCULATION_VERSION = "long_only_equal_cluster_gross_weight_v2"
 
 
 def assign_portfolio_weights(
@@ -25,7 +25,7 @@ def assign_portfolio_weights(
     labels, classifications = _validated_inputs(selection_result)
     cluster_count = selection_result.clustering_result.requested_cluster_count
     target_cluster_gross = 1.0 / cluster_count
-    portfolio_scale = 1.0 / (2.0 * cluster_count)
+    portfolio_scale = 1.0 / cluster_count
 
     local_weights = np.zeros(selection_result.stock_count, dtype=float)
     allocations: list[ClusterAllocation] = []
@@ -38,10 +38,9 @@ def assign_portfolio_weights(
         winner_count = int(winner_mask.sum())
         loser_count = int(loser_mask.sum())
         neutral_count = int(neutral_mask.sum())
-        is_active = winner_count > 0 and loser_count > 0
+        is_active = loser_count > 0
 
         if is_active:
-            local_weights[winner_mask] = -1.0 / winner_count
             local_weights[loser_mask] = 1.0 / loser_count
 
         cluster_local = local_weights[cluster_mask]
@@ -94,14 +93,14 @@ def assign_portfolio_weights(
         uninvested_gross_exposure=1.0 - expected_invested_gross,
         maximum_active_cluster_local_net_error=max(
             (
-                abs(allocation.local_net_exposure)
+                abs(allocation.local_net_exposure - 1.0)
                 for allocation in active_allocations
             ),
             default=0.0,
         ),
         maximum_active_cluster_local_gross_error=max(
             (
-                abs(allocation.local_gross_exposure - 2.0)
+                abs(allocation.local_gross_exposure - 1.0)
                 for allocation in active_allocations
             ),
             default=0.0,

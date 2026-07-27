@@ -286,33 +286,33 @@ neutral: -p <= deviation(i) <= p
 质量检查和自动化测试负责。输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。
 本阶段不向 DuckDB 新增 stock-selection、clustering 或 cluster-count 结果表。
 
-## 第六阶段：分配多空权重
+## 第六阶段：分配只做多权重
 
-本阶段实现论文第 2.2.4 节的单个决策日权重分配，但不实现跨日持仓、
+本阶段以论文第 2.2.4 节为信号基础，在单个决策日分配只做多权重，但不实现跨日持仓、
 `l=3` 再平衡、`q=5%` 止盈或回测。它直接消费第五阶段的分类结果，不重复计算
-previous winners 和 previous losers。
+previous winners 和 previous losers。**只做多是用户确认的策略修改，偏离论文的
+多空市场中性基线。**
 
-在每个同时包含 winner 和 loser 的有效 cluster 内，两侧分别等权：
+每个 cluster 只买入 previous losers，previous winners 和 neutral 的权重均为零：
 
 ```text
 previous loser local weight = +1 / loser count
-previous winner local weight = -1 / winner count
+previous winner local weight = 0
 neutral local weight = 0
 ```
 
-因此每个有效 cluster 的局部多头、空头、净敞口和总敞口分别为 `+1`、`-1`、`0`
-和 `2`。论文中“所有股票权重相同”的字面表述与其示例冲突；实现采用示例所明确
-表达的“多空两侧分别等权”。
+因此，只要 cluster 内至少有一个 loser，该 cluster 就有效；其局部多头、空头、
+净敞口和总敞口分别为 `+1`、`0`、`+1` 和 `1`。
 
 全组合使用总敞口为 `1` 的口径，并将每个 cluster 分配为总敞口的 `1/K`：
 
 ```text
-portfolio weight = local weight / (2 * K)
+portfolio weight = local weight / K
 ```
 
-若所有 clusters 都有效，全组合多头为 `+0.5`、空头为 `-0.5`、净敞口为 `0`、
-总敞口为 `1`。只有一侧信号、单股票或全中性的 cluster 被标记为 inactive，权重
-全部置零；其 `1/K` 额度保留为未投资资金，不重新分配给其他 clusters。
+若所有 clusters 都有效，全组合多头、净敞口和总敞口均为 `1`，空头为 `0`。
+没有 loser 的 cluster 被标记为 inactive，权重全部置零；其 `1/K` 额度保留为
+未投资资金，不重新分配给其他 clusters。
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_portfolio_weights export `

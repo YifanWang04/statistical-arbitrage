@@ -31,7 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stat-arb-portfolio-weights",
         description=(
-            "Assign equal long/short weights within clusters and normalize "
+            "Assign equal long-only weights to previous losers within clusters "
+            "and normalize "
             "each cluster to 1/K of total portfolio gross exposure."
         ),
     )
