@@ -30,7 +30,7 @@ KMEANS_N_INIT = 10
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "outputs"
-    / "portfolio_weights"
+    / "step6_portfolio_weights"
     / f"portfolio_weights_{AS_OF_DATE.isoformat()}.xlsx"
 )
 REPLACE_EXISTING = True

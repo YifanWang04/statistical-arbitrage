@@ -45,7 +45,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "export":
             output = args.output or Path(
-                f"outputs/preprocessing/preprocessing_snapshot_{args.as_of_date.isoformat()}.xlsx"
+                "outputs/step2_preprocessing/"
+                f"preprocessing_snapshot_{args.as_of_date.isoformat()}.xlsx"
             )
             snapshot = get_snapshot(config, args.as_of_date, cache=True)
             exported = export_snapshot_workbook(

@@ -32,7 +32,7 @@ KMEANS_N_INIT = 10
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "outputs"
-    / "stock_selection"
+    / "step5_stock_selection"
     / f"stock_signals_{AS_OF_DATE.isoformat()}.xlsx"
 )
 REPLACE_EXISTING = True

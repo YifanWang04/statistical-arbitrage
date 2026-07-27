@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             kmeans_n_init=args.n_init,
         )
         output = args.output or Path(
-            "outputs/clustering/"
+            "outputs/step4_clustering/"
             f"sponge_sym_clusters_{args.as_of_date.isoformat()}.xlsx"
         )
         result, exported = export_clustering_report(
@@ -111,4 +111,3 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-

@@ -60,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = PreprocessingConfig(database_path=args.database.resolve())
         output = args.output or Path(
-            f"outputs/cluster_count/cluster_count_{args.as_of_date.isoformat()}.xlsx"
+            "outputs/step3_cluster_count/"
+            f"cluster_count_{args.as_of_date.isoformat()}.xlsx"
         )
         result, exported = export_cluster_count_report(
             config,

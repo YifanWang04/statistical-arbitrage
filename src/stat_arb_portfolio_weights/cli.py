@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             kmeans_n_init=args.n_init,
         )
         output = args.output or Path(
-            "outputs/portfolio_weights/"
+            "outputs/step6_portfolio_weights/"
             f"portfolio_weights_{args.as_of_date.isoformat()}.xlsx"
         )
         result, exported = export_portfolio_weights_report(

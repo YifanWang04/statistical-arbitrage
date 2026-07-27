@@ -13,7 +13,7 @@ AS_OF_DATE = date(2026, 7, 17)
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "outputs"
-    / "preprocessing"
+    / "step2_preprocessing"
     / f"preprocessing_snapshot_{AS_OF_DATE.isoformat()}.xlsx"
 )
 REPLACE_EXISTING = True

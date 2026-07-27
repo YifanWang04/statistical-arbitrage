@@ -22,7 +22,7 @@ CLUSTER_COUNT_ESTIMATION_WINDOW = DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "outputs"
-    / "cluster_count"
+    / "step3_cluster_count"
     / f"cluster_count_{AS_OF_DATE.isoformat()}.xlsx"
 )
 REPLACE_EXISTING = True

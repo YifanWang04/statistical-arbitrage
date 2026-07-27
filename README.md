@@ -140,7 +140,7 @@ residual(i,t) = R(i,t) - beta(i,t) * R(mkt,t)
 .\.venv\Scripts\python.exe -m stat_arb_preprocessing export `
   --database data\yahoo_market_data.duckdb `
   --as-of-date 2026-07-17 `
-  --output outputs\preprocessing\preprocessing_snapshot_2026-07-17.xlsx
+  --output outputs\step2_preprocessing\preprocessing_snapshot_2026-07-17.xlsx
 ```
 
 `as-of-date=T` 表示在 `T` 日交易前构造快照：股票池使用 `eligible_date=T`，beta、残差矩阵和
@@ -187,7 +187,7 @@ K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= P }
   --as-of-date 2026-07-17 `
   --cluster-count-estimation-window 20 `
   --variance-threshold 0.90 `
-  --output outputs\cluster_count\cluster_count_2026-07-17.xlsx
+  --output outputs\step3_cluster_count\cluster_count_2026-07-17.xlsx
 ```
 
 `--cluster-count-estimation-window` 默认是论文基线的 `20`，可以显式传入其他值用于核对；它不会修改预处理
@@ -242,7 +242,7 @@ embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
   --tau-negative 1 `
   --seed 0 `
   --n-init 10 `
-  --output outputs\clustering\sponge_sym_clusters_2026-07-17.xlsx
+  --output outputs\step4_clustering\sponge_sym_clusters_2026-07-17.xlsx
 ```
 
 也可以在 IDE 中修改并运行 `scripts/export_clustering.py`。默认的
@@ -277,7 +277,7 @@ neutral: -p <= deviation(i) <= p
   --as-of-date 2026-07-17 `
   --lookback-window 5 `
   --deviation-threshold 0 `
-  --output outputs\stock_selection\stock_signals_2026-07-17.xlsx
+  --output outputs\step5_stock_selection\stock_signals_2026-07-17.xlsx
 ```
 
 也可以在 IDE 中修改并运行 `scripts/export_stock_selection.py`。Excel 包含
@@ -320,7 +320,7 @@ portfolio weight = local weight / (2 * K)
   --as-of-date 2026-07-17 `
   --lookback-window 5 `
   --deviation-threshold 0 `
-  --output outputs\portfolio_weights\portfolio_weights_2026-07-17.xlsx
+  --output outputs\step6_portfolio_weights\portfolio_weights_2026-07-17.xlsx
 ```
 
 也可以在 IDE 中修改并运行 `scripts/export_portfolio_weights.py`。Excel 包含

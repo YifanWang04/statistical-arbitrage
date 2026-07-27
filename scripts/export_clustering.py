@@ -27,7 +27,7 @@ KMEANS_N_INIT = 10
 OUTPUT_PATH = (
     PROJECT_ROOT
     / "outputs"
-    / "clustering"
+    / "step4_clustering"
     / f"sponge_sym_clusters_{AS_OF_DATE.isoformat()}.xlsx"
 )
 REPLACE_EXISTING = True

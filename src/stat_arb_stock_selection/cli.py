@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             kmeans_n_init=args.n_init,
         )
         output = args.output or Path(
-            "outputs/stock_selection/"
+            "outputs/step5_stock_selection/"
             f"stock_signals_{args.as_of_date.isoformat()}.xlsx"
         )
         result, exported = export_stock_selection_report(
