@@ -157,9 +157,11 @@ DuckDB 按需缓存：
 缓存只有在日期、预处理运行和全部计算参数一致时才复用；同一日期改用新的相关窗口时，新快照会在
 单个事务中替换旧快照，数据库不同时保留同一日期的多套参数版本。
 
-Excel 包含 `Parameters_QC`、`Beta_Used`、`Stock_Returns`、`Residual_Matrix`、
-`Correlation_Matrix` 和 `Excluded_Stocks`。输出文件已存在时默认拒绝覆盖；确认覆盖时增加
-`--replace`。也可以在 IDE 中修改并运行 `scripts/export_preprocessing_snapshot.py`。
+Excel 包含 `Summary`、`Beta_Used`、`Stock_Returns`、`Residual_Matrix`、
+`Correlation_Matrix` 和 `Excluded_Stocks`。摘要页集中展示参数、质量指标和总体 QC；
+其余工作表保留构造相关矩阵所需的输入及中间结果，不再并排展示重复的 Excel 复核列。
+输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。也可以在 IDE 中修改并运行
+`scripts/export_preprocessing_snapshot.py`。
 
 ## 第三阶段：累计方差解释率确定 K
 
@@ -191,10 +193,10 @@ K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= P }
 `--cluster-count-estimation-window` 默认是论文基线的 `20`，可以显式传入其他值用于核对；它不会修改预处理
 或实际图聚类使用的 5 日默认窗口。
 
-Excel 只包含 `Eigenvalues` 和 `K_Calculation`。前者列出原始特征值、实际用于累计计算的特征值
-和数值调整；后者记录输入参数、程序结果、Excel 复核公式、逐步累计解释率和最终 K。输出文件已
-存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。也可以在 IDE 中修改并运行
-`scripts/export_cluster_count.py`。
+Excel 只包含 `Summary` 和 `Eigenvalues`。摘要页记录窗口、阈值、最终 K 和总体 QC；
+特征值表同时列出原始值、实际使用值、累计解释率以及是否计入 K，不再把参数和 496 行累计过程
+混排在同一张工作表。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。也可以在
+IDE 中修改并运行 `scripts/export_cluster_count.py`。
 
 ## 第四阶段：SPONGE_sym 股票聚类
 
@@ -247,7 +249,87 @@ embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
 `tau-positive=1` 和 `tau-negative=1` 来自作者 notebook；前者是广义特征问题分母的正则项
 \(\tau^+\)，后者是分子的正则项 \(\tau^-\)。
 
-Excel 包含 `Parameters_QC`、`Eigenvalues`、`Spectral_Embedding` 和
-`Cluster_Assignments`。cluster ID 与作者代码一致使用从 0 开始的标签；标签数字本身没有跨日期
-的经济含义。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。计算在内存中完成，不新增
-clustering 或 cluster-count DuckDB 结果表。
+Excel 包含 `Summary`、`Eigenvalues`、`Spectral_Embedding` 和
+`Cluster_Assignments`。摘要页保留配置、诊断指标、方法口径、版本和总体 QC，不再重复程序值、
+Excel 重算值与差异列。cluster ID 与作者代码一致使用从 0 开始的标签；标签数字本身没有跨日期
+的经济含义。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。计算在内存中完成，
+不新增 clustering 或 cluster-count DuckDB 结果表。
+
+## 第五阶段：识别 previous winners 与 previous losers
+
+本阶段严格实现论文第 2.2.3 节。对每个 cluster 和决策日 `T` 之前的 `w=5`
+个交易日，使用原始股票价格收益计算逐日 cluster 横截面平均收益，再累计每只股票
+相对该均值的偏离：
+
+```text
+deviation(i) = sum[t=T-w..T-1] (raw_return(i,t) - cluster_mean(t))
+winner: deviation(i) > p
+loser:  deviation(i) < -p
+neutral: -p <= deviation(i) <= p
+```
+
+论文基线阈值为 `p=0`。图片和 Markdown 笔记中的 loser 公式误写为 `> p`；
+实现按主论文原文使用 `< -p`。本阶段只做分类，不分配多空权重。
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_stock_selection export `
+  --database data\yahoo_market_data.duckdb `
+  --as-of-date 2026-07-17 `
+  --lookback-window 5 `
+  --deviation-threshold 0 `
+  --output outputs\stock_selection\stock_signals_2026-07-17.xlsx
+```
+
+也可以在 IDE 中修改并运行 `scripts/export_stock_selection.py`。Excel 包含
+`Summary`、`Raw_Returns`、`Cluster_Mean_Returns`、`Daily_Deviations` 和
+`Trade_Signals`。均值、偏差和信号表只保留各自的关键研究字段，完整计算校验由 Python
+质量检查和自动化测试负责。输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。
+本阶段不向 DuckDB 新增 stock-selection、clustering 或 cluster-count 结果表。
+
+## 第六阶段：分配多空权重
+
+本阶段实现论文第 2.2.4 节的单个决策日权重分配，但不实现跨日持仓、
+`l=3` 再平衡、`q=5%` 止盈或回测。它直接消费第五阶段的分类结果，不重复计算
+previous winners 和 previous losers。
+
+在每个同时包含 winner 和 loser 的有效 cluster 内，两侧分别等权：
+
+```text
+previous loser local weight = +1 / loser count
+previous winner local weight = -1 / winner count
+neutral local weight = 0
+```
+
+因此每个有效 cluster 的局部多头、空头、净敞口和总敞口分别为 `+1`、`-1`、`0`
+和 `2`。论文中“所有股票权重相同”的字面表述与其示例冲突；实现采用示例所明确
+表达的“多空两侧分别等权”。
+
+全组合使用总敞口为 `1` 的口径，并将每个 cluster 分配为总敞口的 `1/K`：
+
+```text
+portfolio weight = local weight / (2 * K)
+```
+
+若所有 clusters 都有效，全组合多头为 `+0.5`、空头为 `-0.5`、净敞口为 `0`、
+总敞口为 `1`。只有一侧信号、单股票或全中性的 cluster 被标记为 inactive，权重
+全部置零；其 `1/K` 额度保留为未投资资金，不重新分配给其他 clusters。
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_portfolio_weights export `
+  --database data\yahoo_market_data.duckdb `
+  --as-of-date 2026-07-17 `
+  --lookback-window 5 `
+  --deviation-threshold 0 `
+  --output outputs\portfolio_weights\portfolio_weights_2026-07-17.xlsx
+```
+
+也可以在 IDE 中修改并运行 `scripts/export_portfolio_weights.py`。Excel 包含
+`Summary`、`Cluster_Allocations` 和 `Stock_Weights`：摘要页集中展示参数、敞口和
+总体 QC；其余两页只保留 cluster 分配与逐股权重的关键结果。计算正确性由 Python
+质量检查和自动化测试负责，报告中不再并排重复程序值、Excel 重算值和差异列。
+输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。本阶段不向 DuckDB
+新增任何结果表。
+
+未来回测阶段中，`q=5%` 将针对所有 clusters 汇总后的总敞口归一化组合收益判断；
+止盈在当日收盘后确认，新组合从下一交易日起生效，以避免使用日频收盘数据产生
+look-ahead bias。

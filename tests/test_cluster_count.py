@@ -200,7 +200,7 @@ class ClusterCountIntegrationTests(unittest.TestCase):
             )
             self.assertGreaterEqual(result.selected_k, 1)
 
-    def test_excel_has_two_auditable_sheets_and_refuses_silent_overwrite(self) -> None:
+    def test_excel_has_two_concise_sheets_and_refuses_silent_overwrite(self) -> None:
         result = calculate_cluster_count(
             make_snapshot(
                 np.array(
@@ -219,34 +219,49 @@ class ClusterCountIntegrationTests(unittest.TestCase):
             export_cluster_count_workbook(result, output)
 
             workbook = load_workbook(output, data_only=False, read_only=False)
-            self.assertEqual(workbook.sheetnames, ["Eigenvalues", "K_Calculation"])
+            self.assertEqual(workbook.sheetnames, ["Summary", "Eigenvalues"])
+            summary = workbook["Summary"]
             eigenvalues = workbook["Eigenvalues"]
-            calculation = workbook["K_Calculation"]
+            summary_rows = {
+                summary.cell(row, 1).value: row
+                for row in range(2, summary.max_row + 1)
+                if summary.cell(row, 1).value is not None
+            }
             self.assertEqual(eigenvalues.max_row, result.stock_count + 1)
+            self.assertEqual(eigenvalues.max_column, 5)
             self.assertEqual(
                 [eigenvalues.cell(row, 1).value for row in range(2, 5)],
                 [1, 2, 3],
             )
             raw = [eigenvalues.cell(row, 2).value for row in range(2, 5)]
             self.assertEqual(raw, sorted(raw, reverse=True))
-            self.assertEqual(calculation["B12"].value, 0.80)
             self.assertEqual(
-                calculation["A9"].value,
-                "Cluster-count estimation window",
+                summary.cell(
+                    summary_rows["Variance threshold P"],
+                    2,
+                ).value,
+                0.80,
             )
             self.assertEqual(
-                calculation["B9"].value,
+                summary.cell(
+                    summary_rows["Cluster-count estimation window"],
+                    2,
+                ).value,
                 result.cluster_count_estimation_window,
             )
-            self.assertEqual(calculation["B20"].value, result.selected_k)
-            self.assertEqual(calculation["C15"].value, "=SUM('Eigenvalues'!B2:B4)")
-            self.assertEqual(calculation["B25"].value, "='Eigenvalues'!C2")
-            self.assertEqual(calculation["C25"].value, "=SUM($B$25:B25)")
-            self.assertEqual(calculation["D25"].value, "=C25/$C$16")
-            self.assertEqual(calculation["E25"].value, '=IF(D25>=$B$12,"YES","NO")')
-            self.assertEqual(calculation["F25"].value, '=IF(A25<=$B$20,"YES","NO")')
-            self.assertTrue(str(calculation["C20"].value).startswith("=COUNTIF"))
-            self.assertEqual(calculation.freeze_panes, "A25")
+            self.assertEqual(
+                summary.cell(summary_rows["Selected K"], 2).value,
+                result.selected_k,
+            )
+            self.assertEqual(
+                summary.cell(summary_rows["Overall QC"], 2).value,
+                "OK",
+            )
+            self.assertAlmostEqual(
+                eigenvalues["D2"].value,
+                result.cumulative_explained_ratio[0],
+            )
+            self.assertEqual(eigenvalues["E2"].value, "YES")
             workbook.close()
 
             with self.assertRaises(FileExistsError):

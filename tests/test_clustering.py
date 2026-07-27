@@ -249,13 +249,13 @@ class SpongeSymIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 workbook.sheetnames,
                 [
-                    "Parameters_QC",
+                    "Summary",
                     "Eigenvalues",
                     "Spectral_Embedding",
                     "Cluster_Assignments",
                 ],
             )
-            parameters = workbook["Parameters_QC"]
+            parameters = workbook["Summary"]
             parameter_rows = {
                 parameters.cell(row, 1).value: row
                 for row in range(2, parameters.max_row + 1)
@@ -277,20 +277,13 @@ class SpongeSymIntegrationTests(unittest.TestCase):
                 parameters.cell(parameter_rows["Clustering version"], 2).value,
                 CALCULATION_VERSION,
             )
-            self.assertTrue(
-                str(
-                    parameters.cell(
-                        parameter_rows["Assignments complete"],
-                        3,
-                    ).value
-                ).startswith("=")
+            self.assertEqual(
+                parameters.cell(parameter_rows["Nonempty clusters"], 2).value,
+                result.quality.nonempty_cluster_count,
             )
             self.assertEqual(
-                parameters.cell(parameter_rows["Nonempty clusters"], 3).value,
-                (
-                    f'=COUNTIF(C44:C{43 + result.requested_cluster_count},'
-                    '">0")'
-                ),
+                parameters.cell(parameter_rows["Overall QC"], 2).value,
+                "OK",
             )
             self.assertEqual(
                 workbook["Eigenvalues"].max_row,

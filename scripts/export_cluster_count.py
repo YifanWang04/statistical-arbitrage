@@ -1,4 +1,4 @@
-"""IDE entry point: calculate K for one date and export the audit workbook."""
+"""IDE entry point: calculate K for one date and export the result workbook."""
 
 from datetime import date
 from pathlib import Path

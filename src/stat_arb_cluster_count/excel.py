@@ -10,15 +10,21 @@ from openpyxl.worksheet.worksheet import Worksheet
 from .models import ClusterCountResult
 
 
-HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
-SECTION_FILL = PatternFill("solid", fgColor="D9EAF7")
-OK_FILL = PatternFill("solid", fgColor="C6EFCE")
-CHECK_FILL = PatternFill("solid", fgColor="FFC7CE")
-HEADER_FONT = Font(color="FFFFFF", bold=True)
-FORMULA_FONT = Font(color="008000")
+NAVY = "1F4E78"
+LIGHT_BLUE = "D9EAF7"
+WHITE = "FFFFFF"
+GREEN = "548235"
+RED = "C00000"
+
+HEADER_FILL = PatternFill("solid", fgColor=NAVY)
+SECTION_FILL = PatternFill("solid", fgColor=LIGHT_BLUE)
+OK_FILL = PatternFill("solid", fgColor="E2F0D9")
+CHECK_FILL = PatternFill("solid", fgColor="FCE4D6")
+NEUTRAL_FILL = PatternFill("solid", fgColor="F2F2F2")
+HEADER_FONT = Font(color=WHITE, bold=True)
 THIN_GRAY = Side(style="thin", color="D9E2F3")
-SCIENTIFIC_FORMAT = "0.000000000000E+00"
-DECIMAL_FORMAT = "0.0000000000"
+SCIENTIFIC_FORMAT = "0.000000E+00"
+QC_TOLERANCE = 1e-10
 
 
 def export_cluster_count_workbook(
@@ -36,16 +42,112 @@ def export_cluster_count_workbook(
 
     workbook = Workbook()
     workbook.remove(workbook.active)
+    summary = workbook.create_sheet("Summary")
     eigenvalues = workbook.create_sheet("Eigenvalues")
-    calculation = workbook.create_sheet("K_Calculation")
 
+    _write_summary(summary, result)
     _write_eigenvalues(eigenvalues, result)
-    _write_calculation(calculation, result)
 
-    workbook.calculation.fullCalcOnLoad = True
-    workbook.calculation.forceFullCalc = True
     workbook.save(output)
     return output
+
+
+def _write_summary(sheet: Worksheet, result: ClusterCountResult) -> None:
+    rows = [
+        ("Run setup", None),
+        ("As-of date", result.as_of_date),
+        ("Window start", result.window_start),
+        ("Window end", result.window_end),
+        (
+            "Cluster-count estimation window",
+            result.cluster_count_estimation_window,
+        ),
+        ("Stock count N", result.stock_count),
+        ("Variance threshold P", result.variance_threshold),
+        ("Selected K", result.selected_k),
+        (None, None),
+        ("Quality", None),
+        ("Trace of C", result.quality.trace),
+        ("Total variance used", result.total_variance),
+        ("Raw eigenvalue sum", result.quality.raw_eigenvalue_sum),
+        ("Trace difference", result.quality.trace_difference),
+        ("Minimum raw eigenvalue", result.quality.minimum_raw_eigenvalue),
+        (
+            "Adjusted negative eigenvalues",
+            result.quality.adjusted_negative_eigenvalue_count,
+        ),
+        ("Numerical rank", result.quality.numerical_rank),
+        ("Threshold crossing", _threshold_crossing_status(result)),
+        ("Overall QC", _cluster_count_qc_status(result)),
+        (None, None),
+        ("Method", None),
+        ("Return basis", result.return_basis),
+        ("Beta window", result.beta_window),
+        (None, None),
+        ("Provenance", None),
+        ("Preprocessing run id", result.preprocessing_run_id),
+        ("Snapshot id", result.snapshot_id),
+        ("Source calculation version", result.source_calculation_version),
+        ("Cluster-count version", result.calculation_version),
+    ]
+    for row in rows:
+        sheet.append(row)
+
+    sheet.insert_rows(1)
+    sheet.merge_cells("A1:B1")
+    sheet["A1"] = f"Cluster Count — {result.as_of_date.isoformat()}"
+    sheet["A1"].fill = HEADER_FILL
+    sheet["A1"].font = Font(color=WHITE, bold=True, size=15)
+    sheet["A1"].alignment = Alignment(vertical="center")
+    sheet.row_dimensions[1].height = 28
+
+    section_rows = (2, 11, 22, 26)
+    for row in section_rows:
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        sheet.cell(row, 1).fill = SECTION_FILL
+        sheet.cell(row, 1).font = Font(bold=True, color=NAVY)
+        sheet.cell(row, 1).border = Border(bottom=THIN_GRAY)
+
+    rows_by_label = {
+        sheet.cell(row, 1).value: row
+        for row in range(2, sheet.max_row + 1)
+        if sheet.cell(row, 1).value is not None
+    }
+    for label in ("As-of date", "Window start", "Window end"):
+        sheet.cell(rows_by_label[label], 2).number_format = "yyyy-mm-dd"
+    for label in (
+        "Cluster-count estimation window",
+        "Stock count N",
+        "Selected K",
+        "Adjusted negative eigenvalues",
+        "Numerical rank",
+        "Beta window",
+    ):
+        sheet.cell(rows_by_label[label], 2).number_format = "0"
+    sheet.cell(
+        rows_by_label["Variance threshold P"],
+        2,
+    ).number_format = "0.00%"
+    for label in ("Trace of C", "Total variance used", "Raw eigenvalue sum"):
+        sheet.cell(rows_by_label[label], 2).number_format = "0.000000"
+    for label in ("Trace difference", "Minimum raw eigenvalue"):
+        sheet.cell(rows_by_label[label], 2).number_format = SCIENTIFIC_FORMAT
+
+    for label in ("Threshold crossing", "Overall QC"):
+        cell = sheet.cell(rows_by_label[label], 2)
+        cell.font = Font(
+            bold=True,
+            color=GREEN if cell.value == "OK" else RED,
+        )
+        cell.fill = OK_FILL if cell.value == "OK" else CHECK_FILL
+    for row in range(3, sheet.max_row + 1):
+        if sheet.cell(row, 1).value is not None and row not in section_rows:
+            sheet.cell(row, 1).font = Font(bold=True)
+
+    sheet.freeze_panes = "A3"
+    sheet.sheet_view.showGridLines = False
+    sheet.column_dimensions["A"].width = 36
+    sheet.column_dimensions["B"].width = 58
 
 
 def _write_eigenvalues(sheet: Worksheet, result: ClusterCountResult) -> None:
@@ -54,199 +156,99 @@ def _write_eigenvalues(sheet: Worksheet, result: ClusterCountResult) -> None:
             "Rank",
             "Raw Eigenvalue",
             "Eigenvalue Used",
-            "Numerical Adjustment",
+            "Cumulative Explained Ratio",
+            "Included in K",
         ]
     )
-    for rank, (raw, effective) in enumerate(
-        zip(result.raw_eigenvalues, result.effective_eigenvalues, strict=True),
+    for rank, values in enumerate(
+        zip(
+            result.raw_eigenvalues,
+            result.effective_eigenvalues,
+            result.cumulative_explained_ratio,
+            strict=True,
+        ),
         start=1,
     ):
-        sheet.append([rank, raw, effective, effective - raw])
+        raw, effective, ratio = values
+        sheet.append(
+            [
+                rank,
+                raw,
+                effective,
+                ratio,
+                "YES" if rank <= result.selected_k else "NO",
+            ]
+        )
 
-    _style_header(sheet, 1, 4)
+    _style_header(sheet, columns=5)
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = f"A1:D{sheet.max_row}"
+    sheet.auto_filter.ref = f"A1:E{sheet.max_row}"
     sheet.sheet_view.showGridLines = False
-    sheet.column_dimensions["A"].width = 10
-    sheet.column_dimensions["B"].width = 24
-    sheet.column_dimensions["C"].width = 24
-    sheet.column_dimensions["D"].width = 24
+    widths = (10, 22, 22, 26, 16)
+    for column, width in enumerate(widths, start=1):
+        sheet.column_dimensions[sheet.cell(1, column).column_letter].width = width
     for row in range(2, sheet.max_row + 1):
         sheet.cell(row, 1).number_format = "0"
-        for column in range(2, 5):
+        for column in (2, 3):
             sheet.cell(row, column).number_format = SCIENTIFIC_FORMAT
+        sheet.cell(row, 4).number_format = "0.00%"
+        if row % 2 == 0:
+            for column in range(1, 6):
+                sheet.cell(row, column).fill = PatternFill(
+                    "solid",
+                    fgColor="F8FAFC",
+                )
 
-
-def _write_calculation(sheet: Worksheet, result: ClusterCountResult) -> None:
-    rows = [
-        ("Parameter / QC", "Program Value", "Excel Check", "Difference / Status"),
-        ("As-of date", result.as_of_date, None, None),
-        ("Cluster-count estimation window start", result.window_start, None, None),
-        ("Cluster-count estimation window end", result.window_end, None, None),
-        ("Preprocessing run id", result.preprocessing_run_id, None, None),
-        ("Snapshot id (in-memory)", result.snapshot_id, None, None),
-        ("Return basis", result.return_basis, None, None),
-        ("Beta window", result.beta_window, None, None),
-        (
-            "Cluster-count estimation window",
-            result.cluster_count_estimation_window,
-            None,
-            None,
-        ),
-        ("Source calculation version", result.source_calculation_version, None, None),
-        ("Cluster-count version", result.calculation_version, None, None),
-        ("Variance threshold P", result.variance_threshold, None, None),
-        ("Stock count N", result.stock_count, None, None),
-        ("Trace of C", result.quality.trace, None, None),
-        ("Raw eigenvalue sum", result.quality.raw_eigenvalue_sum, None, None),
-        ("Total variance used", result.total_variance, None, None),
-        ("Minimum raw eigenvalue", result.quality.minimum_raw_eigenvalue, None, None),
-        (
-            "Adjusted negative eigenvalues",
-            result.quality.adjusted_negative_eigenvalue_count,
-            None,
-            None,
-        ),
-        ("Numerical rank", result.quality.numerical_rank, None, None),
-        ("Selected K", result.selected_k, None, None),
-        ("Threshold crossing", "OK", None, None),
-        ("Overall QC", "OK", None, None),
-    ]
-    for row in rows:
-        sheet.append(row)
-
-    table_header_row = len(rows) + 2
-    first_detail_row = table_header_row + 1
-    last_detail_row = first_detail_row + result.stock_count - 1
-    eigenvalue_last_row = result.stock_count + 1
-
-    sheet.cell(15, 3, f"=SUM('Eigenvalues'!B2:B{eigenvalue_last_row})")
-    sheet.cell(15, 4, "=C15-B15")
-    sheet.cell(16, 3, f"=SUM('Eigenvalues'!C2:C{eigenvalue_last_row})")
-    sheet.cell(16, 4, "=C16-B16")
-    sheet.cell(
-        17,
-        3,
-        f"=MIN('Eigenvalues'!B2:B{eigenvalue_last_row})",
+    included_range = f"E2:E{sheet.max_row}"
+    sheet.conditional_formatting.add(
+        included_range,
+        CellIsRule(operator="equal", formula=['"YES"'], fill=OK_FILL),
     )
-    sheet.cell(17, 4, "=C17-B17")
-    sheet.cell(
-        18,
-        3,
-        f'=COUNTIF(\'Eigenvalues\'!D2:D{eigenvalue_last_row},">0")',
+    sheet.conditional_formatting.add(
+        included_range,
+        CellIsRule(operator="equal", formula=['"NO"'], fill=NEUTRAL_FILL),
     )
-    sheet.cell(18, 4, "=C18-B18")
-    sheet.cell(
-        19,
-        3,
-        f'=COUNTIF(\'Eigenvalues\'!C2:C{eigenvalue_last_row},">1E-10")',
+
+
+def _threshold_crossing_status(result: ClusterCountResult) -> str:
+    selected_ratio = result.cumulative_explained_ratio[result.selected_k - 1]
+    previous_ratio = (
+        result.cumulative_explained_ratio[result.selected_k - 2]
+        if result.selected_k > 1
+        else None
     )
-    sheet.cell(19, 4, "=C19-B19")
-    sheet.cell(
-        20,
-        3,
-        f'=COUNTIF(D{first_detail_row}:D{last_detail_row},"<"&B12)+1',
+    crossed = selected_ratio + QC_TOLERANCE >= result.variance_threshold
+    first_crossing = (
+        previous_ratio is None
+        or previous_ratio < result.variance_threshold
     )
-    sheet.cell(20, 4, "=C20-B20")
-    sheet.cell(
-        21,
-        3,
-        (
-            f'=IF(AND(INDEX(D{first_detail_row}:D{last_detail_row},B20)>=B12,'
-            f'IF(B20=1,TRUE,INDEX(D{first_detail_row}:D{last_detail_row},B20-1)<B12)),'
-            '"OK","CHECK")'
-        ),
+    return "OK" if crossed and first_crossing else "CHECK"
+
+
+def _cluster_count_qc_status(result: ClusterCountResult) -> str:
+    quality = result.quality
+    checks = (
+        result.stock_count == len(result.raw_eigenvalues),
+        result.stock_count == len(result.effective_eigenvalues),
+        result.stock_count == len(result.cumulative_explained_ratio),
+        result.total_variance > 0.0,
+        abs(quality.trace_difference) < 1e-8,
+        quality.minimum_raw_eigenvalue >= -QC_TOLERANCE,
+        1 <= result.selected_k <= result.stock_count,
+        _threshold_crossing_status(result) == "OK",
     )
-    sheet.cell(21, 4, '=IF(C21=B21,"OK","CHECK")')
-    sheet.cell(
-        22,
-        3,
-        '=IF(AND(ABS(D15)<=1E-8,ABS(D16)<=1E-8,ABS(D17)<=1E-8,'
-        'D18=0,D19=0,D20=0,D21="OK"),"OK","CHECK")',
-    )
-    sheet.cell(22, 4, '=IF(C22=B22,"OK","CHECK")')
-
-    detail_headers = (
-        "Rank",
-        "Eigenvalue Used",
-        "Cumulative Variance",
-        "Cumulative Explained Ratio",
-        "Threshold Reached",
-        "Included in K",
-    )
-    for column, value in enumerate(detail_headers, start=1):
-        sheet.cell(table_header_row, column, value)
-
-    for rank in range(1, result.stock_count + 1):
-        row = first_detail_row + rank - 1
-        eigenvalue_row = rank + 1
-        sheet.cell(row, 1, rank)
-        sheet.cell(row, 2, f"='Eigenvalues'!C{eigenvalue_row}")
-        sheet.cell(row, 3, f"=SUM($B${first_detail_row}:B{row})")
-        sheet.cell(row, 4, f"=C{row}/$C$16")
-        sheet.cell(row, 5, f'=IF(D{row}>=$B$12,"YES","NO")')
-        sheet.cell(row, 6, f'=IF(A{row}<=$B$20,"YES","NO")')
-
-    _style_header(sheet, 1, 4)
-    _style_header(sheet, table_header_row, 6)
-    for row in range(2, 23):
-        sheet.cell(row, 1).fill = SECTION_FILL
-        sheet.cell(row, 1).font = Font(bold=True)
-    for row in (2, 3, 4):
-        sheet.cell(row, 2).number_format = "yyyy-mm-dd"
-    for row in (8, 9, 13, 18, 19, 20):
-        sheet.cell(row, 2).number_format = "0"
-        if sheet.cell(row, 3).value is not None:
-            sheet.cell(row, 3).number_format = "0"
-        if sheet.cell(row, 4).value is not None:
-            sheet.cell(row, 4).number_format = "0"
-    sheet.cell(12, 2).number_format = "0.00%"
-    for row in (14, 15, 16):
-        for column in (2, 3, 4):
-            sheet.cell(row, column).number_format = DECIMAL_FORMAT
-    for column in (2, 3, 4):
-        sheet.cell(17, column).number_format = SCIENTIFIC_FORMAT
-    for row in range(2, 23):
-        for column in (3, 4):
-            if isinstance(sheet.cell(row, column).value, str) and sheet.cell(
-                row, column
-            ).value.startswith("="):
-                sheet.cell(row, column).font = FORMULA_FONT
-
-    for row in range(first_detail_row, last_detail_row + 1):
-        sheet.cell(row, 1).number_format = "0"
-        sheet.cell(row, 2).number_format = SCIENTIFIC_FORMAT
-        sheet.cell(row, 3).number_format = DECIMAL_FORMAT
-        sheet.cell(row, 4).number_format = "0.0000%"
-        for column in range(2, 7):
-            sheet.cell(row, column).font = FORMULA_FONT
-
-    for range_ref in ("C21:D22",):
-        sheet.conditional_formatting.add(
-            range_ref,
-            CellIsRule(operator="equal", formula=['"OK"'], fill=OK_FILL),
-        )
-        sheet.conditional_formatting.add(
-            range_ref,
-            CellIsRule(operator="equal", formula=['"CHECK"'], fill=CHECK_FILL),
-        )
-
-    sheet.freeze_panes = f"A{first_detail_row}"
-    sheet.auto_filter.ref = f"A{table_header_row}:F{last_detail_row}"
-    sheet.sheet_view.showGridLines = False
-    sheet.column_dimensions["A"].width = 36
-    sheet.column_dimensions["B"].width = 28
-    sheet.column_dimensions["C"].width = 24
-    sheet.column_dimensions["D"].width = 24
-    sheet.column_dimensions["E"].width = 20
-    sheet.column_dimensions["F"].width = 16
+    return "OK" if all(checks) else "CHECK"
 
 
-def _style_header(sheet: Worksheet, row: int, columns: int) -> None:
+def _style_header(sheet: Worksheet, *, columns: int) -> None:
     for column in range(1, columns + 1):
-        cell = sheet.cell(row, column)
+        cell = sheet.cell(1, column)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            wrap_text=True,
+        )
         cell.border = Border(bottom=THIN_GRAY)
-    sheet.row_dimensions[row].height = 24
+    sheet.row_dimensions[1].height = 32

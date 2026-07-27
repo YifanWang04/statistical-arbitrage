@@ -21,6 +21,8 @@ stat-arb-data = "stat_arb_data.cli:main"
 stat-arb-preprocessing = "stat_arb_preprocessing.cli:main"
 stat-arb-cluster-count = "stat_arb_cluster_count.cli:main"
 stat-arb-clustering = "stat_arb_clustering.cli:main"
+stat-arb-stock-selection = "stat_arb_stock_selection.cli:main"
+stat-arb-portfolio-weights = "stat_arb_portfolio_weights.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

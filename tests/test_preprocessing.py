@@ -323,7 +323,7 @@ class PreprocessingIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 workbook.sheetnames,
                 [
-                    "Parameters_QC",
+                    "Summary",
                     "Beta_Used",
                     "Stock_Returns",
                     "Residual_Matrix",
@@ -359,13 +359,17 @@ class PreprocessingIntegrationTests(unittest.TestCase):
                 if rule.type == "expression" and rule.stopIfTrue
             ]
             self.assertEqual(len(diagonal_rules), 1)
-            formulas = [
-                cell.value
-                for row in workbook["Parameters_QC"].iter_rows()
-                for cell in row
-                if isinstance(cell.value, str) and cell.value.startswith("=")
-            ]
-            self.assertTrue(any("CORREL" in formula for formula in formulas))
+            summary = workbook["Summary"]
+            summary_rows = {
+                summary.cell(row, 1).value: row
+                for row in range(2, summary.max_row + 1)
+                if summary.cell(row, 1).value is not None
+            }
+            self.assertEqual(
+                summary.cell(summary_rows["Overall QC"], 2).value,
+                "OK",
+            )
+            self.assertEqual(summary.max_column, 2)
             workbook.close()
             with self.assertRaises(FileExistsError):
                 export_snapshot_workbook(snapshot, output)
@@ -394,7 +398,7 @@ class PreprocessingIntegrationTests(unittest.TestCase):
             from openpyxl import load_workbook
 
             workbook = load_workbook(output, data_only=False, read_only=False)
-            parameters = workbook["Parameters_QC"]
+            parameters = workbook["Summary"]
             rows = {
                 parameters.cell(row, 1).value: row
                 for row in range(2, parameters.max_row + 1)
@@ -427,7 +431,7 @@ class PreprocessingIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 parameters.cell(rows["Contains non-finite values"], 2).value,
-                "FALSE",
+                "NO",
             )
             self.assertEqual(
                 parameters.cell(rows["Minimum eigenvalue"], 2).number_format,
@@ -435,16 +439,9 @@ class PreprocessingIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 parameters.cell(rows["Maximum asymmetry"], 2).number_format,
-                "0.0000000000",
+                "0.000000E+00",
             )
-            formula_labels = (
-                next(label for label in rows if str(label).startswith("Residual identity sample:")),
-                next(label for label in rows if str(label).startswith("Correlation sample:")),
-            )
-            for label in formula_labels:
-                row = rows[label]
-                self.assertTrue(str(parameters.cell(row, 3).value).startswith("="))
-                self.assertEqual(parameters.cell(row, 4).number_format, "0.0000000000")
+            self.assertEqual(parameters.max_column, 2)
             workbook.close()
 
 
