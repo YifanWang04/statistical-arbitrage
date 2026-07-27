@@ -1,21 +1,46 @@
-# 统计套利论文复刻：数据阶段
+# Correlation Matrix Clustering 统计套利复刻
 
-本阶段实现用户确认的 **Yahoo Approximate Price-Return Baseline**：
+本项目分阶段复刻 Cartea、Cucuringu 与 Jin 的论文 *Correlation Matrix Clustering for Statistical Arbitrage Portfolios*。当前代码已经贯通单个决策日的完整研究链路：
 
-- 数据范围从 `2020-01-01` 开始；默认结束于运行日前一日。
-- 候选集默认保留 Yahoo 当前可发现的全部 NYSE、NYSE American 和 NASDAQ 普通股发行人；可选地按当前发行人市值预筛选。
-- 普通股使用 Yahoo `quoteType=EQUITY` 并排除明显优先股、权证、单位和权利作为近似口径；它并不等同于 CRSP `SHRCD 10/11`。
-- 每个交易日 `t` 使用前一 SPY 交易日 `t-1` 的信息。每个发行人先只保留一支股票，再动态选取市值前 500 个发行人。
-- Alphabet 明确固定使用 `GOOG`；其他多类别发行人使用截至 `t-1` 的 60 个市场交易日平均成交额选择股票类别。
-- 股票和 SPY 的策略收益均由 Yahoo `Close` 计算：历史价格已按拆股统一尺度，但不包含股息。复权价、股息和总收益仍作为核对字段保留。
-- 历史市值使用根据拆股事件重建的当时实际成交价；若历史股数报告尚未反映已经发生的拆股，计算时会同步调整股数。
-- 历史股数缺失时不使用未来或当前股数向过去回填，该股票在有股数观测前不会进入排名。
-- 当前 Yahoo Screener 无法完整发现已经退市或不再可发现的历史证券。因此，逐日排名避免了未上市股票向过去进入股票池，但不能彻底消除 survivorship bias；严格复刻需要 CRSP/WRDS 一类历史证券主表。
-- FF12 字段保留为空；本阶段不计算 beta、残差、聚类或交易信号。
+```text
+Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
+          → SPONGE_sym clusters → winners / losers → 只做多权重
+```
+
+目前已完成阶段 1–6；跨日再平衡和回测尚未实现。
+
+## 项目状态
+
+| 阶段 | 状态 | 当前实现 |
+|---|---:|---|
+| 1. Data | 已完成 | Yahoo 行情、历史股数、SPY、逐日动态前 500 股票池、DuckDB |
+| 2. Data Pre-Processing | 已完成 | 60 日 beta、市场残差收益、5 日相关矩阵快照 |
+| 3. Number of Clusters K | 已完成 | 20 日相关矩阵、累计方差解释率 90% |
+| 4. Clustering | 已完成 | `SPONGE_sym` SigNet 兼容 embedding、k-means++ |
+| 5. Identify Stocks | 已完成 | previous winner / loser / neutral |
+| 6. Assign Weights | 已完成 | 单决策日、只做多、cluster 等额度 |
+| 7. Backtest & Rebalance | 未实现 | 待确认 `l=3`、`q=5%`、持仓时点和记账规则 |
+
+## 论文口径与当前项目口径
+
+当前实现不是对论文数据和组合规则的逐字复制。重要差异如下：
+
+| 项目 | 论文 | 当前代码 |
+|---|---|---|
+| 数据源与时期 | CRSP，2000-01 至 2022-12 | Yahoo，默认从 2020-01-01 至运行日前一日 |
+| 股票池 | NYSE/Amex/NASDAQ 普通股，市值前 25% | Yahoo 普通股近似口径，每日市值前 500 个发行人 |
+| 收益 | 拆股和股息调整后收益 | Yahoo `Close` 价格收益，拆股尺度一致、不含股息 |
+| FF12 | 有行业标签 | `ff12_code` 暂为空 |
+| 动态 K | 论文动态方法 | 20 日残差相关矩阵，累计解释率 90% |
+| SPONGE embedding | 论文文字：K 个原始特征向量 | 作者 notebook/SigNet 兼容：K-1 个向量并除以特征值 |
+| 信号阈值 p | `0` | CLI 与 IDE 脚本默认 `0.05` |
+| 组合 | 做多 losers、做空 winners | 只做多 losers |
+
+因此，当前结果应称为 **Yahoo Approximate Price-Return、SigNet-compatible、Long-only 项目口径**。严格论文复刻仍需要历史证券主表（如 CRSP/WRDS）、含股息收益及论文多空组合。
 
 ## 安装
 
-在 PowerShell 中执行：
+要求 Python 3.11 或更高版本。在 PowerShell 中执行：
 
 ```powershell
 python -m venv .venv
@@ -23,118 +48,75 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-## 在程序中下载完整数据（推荐）
+主要依赖为 DuckDB、pandas、NumPy（由依赖间接安装）、SciPy、scikit-learn、openpyxl 和 yfinance。
 
-在 PyCharm、VS Code 或其他 Python IDE 中打开 `scripts/run_data_download.py`，然后点击 Run。
+## 推荐运行方式：IDE 脚本
 
-需要调整的参数都集中在文件顶部：
+`scripts/` 中每个入口的参数都集中在文件顶部，适合在 PyCharm 或 VS Code 中修改后直接运行：
 
-- `START_DATE`：数据起始日；
-- `END_DATE`：`None` 表示运行日前一天；
-- `TOP_N`：默认 500；
-- `CANDIDATE_POOL_SIZE`：可选的当前发行人市值预筛选数量；默认 `None`，表示保留全部当前可发现普通股发行人；
-- `REPLACE_EXISTING_DATABASE`：默认禁止覆盖已有数据库。
+1. `scripts/run_data_download.py`
+2. `scripts/run_preprocessing.py`
+3. `scripts/export_preprocessing_snapshot.py`
+4. `scripts/export_cluster_count.py`
+5. `scripts/export_clustering.py`
+6. `scripts/export_stock_selection.py`
+7. `scripts/export_portfolio_weights.py`
 
-程序默认生成 `data/yahoo_market_data.duckdb`。
+注意：
 
-## 在程序中查看数据（推荐）
+- 所有导出脚本当前示例日期均为 `2026-07-17`，运行前应修改 `AS_OF_DATE`；
+- 多个 IDE 导出脚本当前设置 `REPLACE_EXISTING=True`；
+- `run_data_download.py` 当前设置 `CANDIDATE_POOL_SIZE=1500`、`REPLACE_EXISTING_DATABASE=True`；
+- 这些是脚本内的当前设置，不是 CLI 的安全默认值。
 
-数据库生成后，在 IDE 中直接运行 `scripts/view_data.py`。它会以只读方式启动 DuckDB 官方本地 UI，并在浏览器中打开数据库。查看结束后，请回到运行它的终端按 Enter，停止 UI 并释放数据库文件。
+默认数据库为 `data/yahoo_market_data.duckdb`。
 
-首次使用 DuckDB UI 需要联网安装官方 `ui` 扩展。数据库只保留三个业务 schema：
+## 命令行完整流程
 
-- `browse.daily_universe`：逐日的动态前 500 发行人、主要股票选择依据及当日行情；`strategy_return` 为不含股息的价格收益；
-- `browse.latest_universe`：最新交易日股票池；
-- `browse.daily_quality`：每日入选数量和缺失情况；
-- `market_data`：证券、价格、历史股数、SPY 收益、市值和股票池等持久化数据；
-- `audit`：运行记录、参数、字段说明和下载问题；运行第二阶段后也记录预处理运行。
-- `preprocessing`：运行第二阶段后新增，保存逐日 beta、市场残差收益和按需生成的相关矩阵快照。
+以下示例使用 `2026-07-17` 作为决策日 `T`。`T` 必须是数据库中的 SPY 交易日，并且存在该日的股票池。
 
-数据下载完成时仍只有 `market_data/audit/browse` 三个 schema；首次运行预处理后增加
-`preprocessing`。`browse` 只保留隐藏了多表关联或质量计算的视图；原表不再以转发视图重复出现。
-
-## 命令行方式（可选）
+### 1. 下载数据
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_data download
 ```
 
-默认生成 `data/yahoo_market_data.duckdb`。若文件已经存在，程序会拒绝覆盖；确认需要重建时显式增加 `--replace`。
+CLI 默认：
 
-下载会先在同一目录构建临时数据库，只有完整流程成功后才发布为正式数据库。即使显式使用
-`--replace`，下载失败或正式数据库仍被 DuckDB 占用时，已有数据库也会保留。
+- `start=2020-01-01`；
+- `end=运行日前一日`；
+- `top-n=500`；
+- 不做当前市值候选集预筛选；
+- 若数据库已存在则拒绝覆盖。
 
-默认完整下载需要对全部当前可发现普通股分别请求历史股数，可能耗时较长，也可能触发 Yahoo 限流。可以先做小规模验证：
-
-```powershell
-.\.venv\Scripts\python.exe -m stat_arb_data download --candidate-pool-size 20 --top-n 10 --database data/smoke_test.duckdb
-```
-
-### 从命令行打开数据库
-
-完整数据库生成后，双击 `scripts/open_database.cmd`。它会以只读方式启动 DuckDB 官方本地 UI，并在浏览器中打开数据库。也可以执行：
+完整下载需要对当前可发现的普通股候选逐一请求历史股数，可能耗时较长并触发 Yahoo 限流。建议先运行小规模验证：
 
 ```powershell
-.\.venv\Scripts\python.exe -m stat_arb_data open
+.\.venv\Scripts\python.exe -m stat_arb_data download `
+  --candidate-pool-size 20 `
+  --top-n 10 `
+  --database data\smoke_test.duckdb
 ```
 
-终端快速检查：
+确认重建已有数据库时显式增加 `--replace`。程序先在同目录构建临时 DuckDB，只有完整成功后才原子替换正式文件；失败时保留旧数据库。
 
-```powershell
-.\.venv\Scripts\python.exe -m stat_arb_data inspect
-```
-
-### 升级已有数据库的 catalog
-
-早期版本生成的 `meta/raw/core/quality/browse` 五 schema 数据库可以原地升级，无需重新下载：
-
-```powershell
-.\.venv\Scripts\python.exe -m stat_arb_data upgrade-catalog
-```
-
-升级前先在启动 DuckDB UI 的终端按 Enter 或 `Ctrl+C`，确保数据库已经释放。升级过程先复制到
-同目录临时库，核对关键表行数后才替换原文件；失败时保留旧数据库。
-
-## 测试
-
-测试不调用 Yahoo 网络接口：
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-## 第二阶段：beta、市场残差收益和相关矩阵
-
-本阶段使用已经确认的 Yahoo Price-Return Baseline，不改用总收益：股票输入为
-`market_data.daily_prices.price_return`，市场输入为
-`market_data.market_returns.market_return`。
-
-对每只历史上至少进入过一次股票池的股票，在每个 SPY 交易日 `t` 使用包含当日的连续
-60 个市场交易日计算：
-
-```text
-beta(i,t) = Cov(R(i), R(mkt)) / Var(R(mkt))
-residual(i,t) = R(i,t) - beta(i,t) * R(mkt,t)
-```
-
-窗口必须有 60 个完整的股票/市场收益观测；不填零、不前向填充。结果写入
-`preprocessing.daily_market_residuals`，包含窗口边界、观测数和无效原因。
-
-### 构建逐日 beta 和残差
+### 2. 构建逐日 beta 和市场残差收益
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_preprocessing build `
   --database data\yahoo_market_data.duckdb
 ```
 
-也可以在 IDE 中运行 `scripts/run_preprocessing.py`。构建在同一 DuckDB 事务中发布；失败时保留
-上一次完整结果。成功重建会清空旧的相关矩阵缓存。
+对历史上至少进入过一次股票池的股票，在每个 SPY 交易日 `t` 使用包含当日的连续 60 个交易日计算：
 
-新版预处理首次打开旧数据库时会保留逐日残差和运行记录，将 `beta_60d` 字段迁移为与窗口无关的
-`beta`，并清空后续可以重建的旧结构快照缓存。请求快照时，beta 窗口、对齐方式、缺失值规则、
-计算版本、方差阈值和收益口径必须与当前逐日残差运行一致，否则程序会要求先重新构建预处理数据。
+```text
+beta(i,t) = Cov(R(i), R(mkt)) / Var(R(mkt))
+residual(i,t) = R(i,t) - beta(i,t) * R(mkt,t)
+```
 
-### 导出指定日期快照
+窗口必须有 60 个完整的股票和市场收益观测；不填零、不前向填充，也不估计 alpha。结果写入 `preprocessing.daily_market_residuals`。
+
+### 3. 导出预处理快照
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_preprocessing export `
@@ -143,43 +125,23 @@ residual(i,t) = R(i,t) - beta(i,t) * R(mkt,t)
   --output outputs\step2_preprocessing\preprocessing_snapshot_2026-07-17.xlsx
 ```
 
-`as-of-date=T` 表示在 `T` 日交易前构造快照：股票池使用 `eligible_date=T`，beta、残差矩阵和
-相关矩阵只使用 `T` 之前 5 个 SPY 交易日。窗口不完整或五日残差方差为零的股票被整列剔除，
-原因写入 `snapshot_exclusions` 和 Excel 的 `Excluded_Stocks`。
+`as-of-date=T` 表示在 `T` 日交易前构造快照：
 
-DuckDB 按需缓存：
+- 股票池使用 `eligible_date=T`；
+- beta、股票收益、SPY 收益和残差只使用 `T` 之前 5 个 SPY 交易日；
+- 窗口不完整或 5 日残差方差为零的股票整列剔除；
+- 排除原因写入数据库缓存和 Excel。
 
-- `correlation_snapshots`：快照参数和质量指标；
-- `snapshot_residuals`：实际使用的 5 日 beta、收益和残差；
-- `snapshot_correlations`：相关矩阵上三角；
-- `snapshot_exclusions`：未进入矩阵的股票及原因。
+Excel 工作表：
 
-缓存只有在日期、预处理运行和全部计算参数一致时才复用；同一日期改用新的相关窗口时，新快照会在
-单个事务中替换旧快照，数据库不同时保留同一日期的多套参数版本。
+- `Summary`
+- `Beta_Used`
+- `Stock_Returns`
+- `Residual_Matrix`
+- `Correlation_Matrix`
+- `Excluded_Stocks`
 
-Excel 包含 `Summary`、`Beta_Used`、`Stock_Returns`、`Residual_Matrix`、
-`Correlation_Matrix` 和 `Excluded_Stocks`。摘要页集中展示参数、质量指标和总体 QC；
-其余工作表保留构造相关矩阵所需的输入及中间结果，不再并排展示重复的 Excel 复核列。
-输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。也可以在 IDE 中修改并运行
-`scripts/export_preprocessing_snapshot.py`。
-
-## 第三阶段：累计方差解释率确定 K
-
-本阶段按照论文动态 K 的设定，使用指定日期之前 20 个交易日的市场残差收益构造独立的 Pearson
-相关矩阵。这个窗口只用于确定 K；第二阶段和后续实际图聚类仍使用 5 日市场残差相关矩阵。
-20 日 Pearson 相关矩阵的理论秩最多为 19，与论文动态方法通常选择 10–20 个 clusters 的结果
-范围一致。
-
-对相关矩阵的特征值从大到小排序，默认取累计解释 90% 总方差所需的最少特征值数量：
-
-```text
-K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= P }
-```
-
-阈值 `P` 默认是 `0.90`，可以在 `(0, 1]` 范围内调整。计算使用指定日期的内存快照，不保存
-相关矩阵、特征值或 K，也不新增 DuckDB 结果表。
-
-### 导出指定日期的 K 计算过程
+### 4. 确定动态 K
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_cluster_count export `
@@ -190,46 +152,15 @@ K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= P }
   --output outputs\step3_cluster_count\cluster_count_2026-07-17.xlsx
 ```
 
-`--cluster-count-estimation-window` 默认是论文基线的 `20`，可以显式传入其他值用于核对；它不会修改预处理
-或实际图聚类使用的 5 日默认窗口。
-
-Excel 只包含 `Summary` 和 `Eigenvalues`。摘要页记录窗口、阈值、最终 K 和总体 QC；
-特征值表同时列出原始值、实际使用值、累计解释率以及是否计入 K，不再把参数和 496 行累计过程
-混排在同一张工作表。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。也可以在
-IDE 中修改并运行 `scripts/export_cluster_count.py`。
-
-## 第四阶段：SPONGE_sym 股票聚类
-
-本阶段对同一个 `as-of-date=T` 使用两套相互独立的历史窗口：
-
-- 前 20 个交易日的市场残差相关矩阵只用于第三阶段的 90% 累计方差规则并确定 K；
-- 前 5 个交易日的市场残差相关矩阵作为 SPONGE_sym 的 signed adjacency matrix。
-
-两个窗口都严格截止到 `T` 之前的最后一个交易日。股票必须满足各自窗口的完整数据规则，因此用于
-确定 K 和用于实际聚类的股票数量可以不同；K 是从 20 日窗口得到的标量，随后应用到 5 日股票集合。
-
-### 当前暂用的作者代码兼容口径
-
-主论文第 2.1.3 节写明应取 K 个最小广义特征向量，并直接在 K 维空间执行 k-means++。作者示例
-notebook 调用的旧版 SigNet 实际默认取 K-1 个特征向量，并在聚类前执行 `v / lambda`。这会改变
-embedding 中的距离，因此两种口径可能产生不同 clusters。
-
-本阶段根据已确认的临时决定使用 notebook/SigNet 口径，计算版本为
-`sponge_sym_signet_compat_v1`：
+程序使用 `T` 前 20 个交易日的市场残差收益构造独立相关矩阵，并计算：
 
 ```text
-eigenvector_count = K - 1
-embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
+K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= 0.90 }
 ```
 
-该结果不是论文文字所描述的 K 维原始特征向量基线。未来切换到论文口径时必须使用新的计算版本，
-并将两种结果作为不同实验进行比较，不能静默替换或混合。
+20 日窗口只用于确定 K；实际图聚类仍使用 5 日窗口。Excel 包含 `Summary` 和 `Eigenvalues`。该步骤不把相关矩阵、特征值或 K 持久化到 DuckDB。
 
-作者 notebook 没有固定 LOBPCG 或 KMeans 的随机状态，也没有显式传入 `n_init`。为满足本项目的
-可复现要求，当前显式使用 `seed=0`、`n_init=10`；两者都会写入程序结果和 Excel。显式指定
-`n_init` 也避免 scikit-learn 从 1.4 起将默认值改为 `"auto"` 后产生版本漂移。
-
-### 导出指定日期的聚类结果
+### 5. 运行 SPONGE_sym 聚类
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_clustering export `
@@ -245,91 +176,179 @@ embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
   --output outputs\step4_clustering\sponge_sym_clusters_2026-07-17.xlsx
 ```
 
-也可以在 IDE 中修改并运行 `scripts/export_clustering.py`。默认的
-`tau-positive=1` 和 `tau-negative=1` 来自作者 notebook；前者是广义特征问题分母的正则项
-\(\tau^+\)，后者是分子的正则项 \(\tau^-\)。
-
-Excel 包含 `Summary`、`Eigenvalues`、`Spectral_Embedding` 和
-`Cluster_Assignments`。摘要页保留配置、诊断指标、方法口径、版本和总体 QC，不再重复程序值、
-Excel 重算值与差异列。cluster ID 与作者代码一致使用从 0 开始的标签；标签数字本身没有跨日期
-的经济含义。输出文件已存在时默认拒绝覆盖，确认覆盖时增加 `--replace`。计算在内存中完成，
-不新增 clustering 或 cluster-count DuckDB 结果表。
-
-## 第五阶段：识别 previous winners 与 previous losers
-
-本阶段严格实现论文第 2.2.3 节。对每个 cluster 和决策日 `T` 之前的 `w=5`
-个交易日，使用原始股票价格收益计算逐日 cluster 横截面平均收益，再累计每只股票
-相对该均值的偏离：
+当前计算版本为 `sponge_sym_signet_compat_v1`：
 
 ```text
-deviation(i) = sum[t=T-w..T-1] (raw_return(i,t) - cluster_mean(t))
-winner: deviation(i) > p
-loser:  deviation(i) < -p
-neutral: -p <= deviation(i) <= p
+eigenvector_count = K - 1
+embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
 ```
 
-论文基线阈值为 `p=0`。图片和 Markdown 笔记中的 loser 公式误写为 `> p`；
-实现按主论文原文使用 `< -p`。本阶段只做分类，不分配多空权重。
+这与论文文字描述的 K 维原始特征向量口径不同，但与作者 notebook 调用的旧 SigNet 行为兼容。随机种子和 `n_init` 被显式固定以保证可复现。
+
+Excel 工作表：
+
+- `Summary`
+- `Eigenvalues`
+- `Spectral_Embedding`
+- `Cluster_Assignments`
+
+cluster ID 从 `0` 开始；标签数字不应跨日期直接比较。
+
+### 6. 识别 previous winners 和 losers
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_stock_selection export `
   --database data\yahoo_market_data.duckdb `
   --as-of-date 2026-07-17 `
   --lookback-window 5 `
-  --deviation-threshold 0 `
+  --deviation-threshold 0.05 `
   --output outputs\step5_stock_selection\stock_signals_2026-07-17.xlsx
 ```
 
-也可以在 IDE 中修改并运行 `scripts/export_stock_selection.py`。Excel 包含
-`Summary`、`Raw_Returns`、`Cluster_Mean_Returns`、`Daily_Deviations` 和
-`Trade_Signals`。均值、偏差和信号表只保留各自的关键研究字段，完整计算校验由 Python
-质量检查和自动化测试负责。输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。
-本阶段不向 DuckDB 新增 stock-selection、clustering 或 cluster-count 结果表。
-
-## 第六阶段：分配只做多权重
-
-本阶段以论文第 2.2.4 节为信号基础，在单个决策日分配只做多权重，但不实现跨日持仓、
-`l=3` 再平衡、`q=5%` 止盈或回测。它直接消费第五阶段的分类结果，不重复计算
-previous winners 和 previous losers。**只做多是用户确认的策略修改，偏离论文的
-多空市场中性基线。**
-
-每个 cluster 只买入 previous losers，previous winners 和 neutral 的权重均为零：
+对每个 cluster 和 `T` 前 5 个交易日：
 
 ```text
-previous loser local weight = +1 / loser count
-previous winner local weight = 0
-neutral local weight = 0
+deviation(i) = sum(raw_return(i,t) - cluster_mean(t))
+winner: deviation(i) > p
+loser:  deviation(i) < -p
+neutral: -p <= deviation(i) <= p
 ```
 
-因此，只要 cluster 内至少有一个 loser，该 cluster 就有效；其局部多头、空头、
-净敞口和总敞口分别为 `+1`、`0`、`+1` 和 `1`。
+这里使用股票原始价格收益，不使用市场残差收益。主论文 `p=0`；当前 CLI 和 IDE 脚本默认 `p=0.05`，这是为减少持仓数量而确认的项目修改。等于阈值时归为 neutral。
 
-全组合使用总敞口为 `1` 的口径，并将每个 cluster 分配为总敞口的 `1/K`：
+Excel 工作表：
 
-```text
-portfolio weight = local weight / K
-```
+- `Summary`
+- `Raw_Returns`
+- `Cluster_Mean_Returns`
+- `Daily_Deviations`
+- `Trade_Signals`
 
-若所有 clusters 都有效，全组合多头、净敞口和总敞口均为 `1`，空头为 `0`。
-没有 loser 的 cluster 被标记为 inactive，权重全部置零；其 `1/K` 额度保留为
-未投资资金，不重新分配给其他 clusters。
+### 7. 分配单日只做多权重
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_portfolio_weights export `
   --database data\yahoo_market_data.duckdb `
   --as-of-date 2026-07-17 `
   --lookback-window 5 `
-  --deviation-threshold 0 `
+  --deviation-threshold 0.05 `
   --output outputs\step6_portfolio_weights\portfolio_weights_2026-07-17.xlsx
 ```
 
-也可以在 IDE 中修改并运行 `scripts/export_portfolio_weights.py`。Excel 包含
-`Summary`、`Cluster_Allocations` 和 `Stock_Weights`：摘要页集中展示参数、敞口和
-总体 QC；其余两页只保留 cluster 分配与逐股权重的关键结果。计算正确性由 Python
-质量检查和自动化测试负责，报告中不再并排重复程序值、Excel 重算值和差异列。
-输出文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。本阶段不向 DuckDB
-新增任何结果表。
+当前项目只买入 previous losers：
 
-未来回测阶段中，`q=5%` 将针对所有 clusters 汇总后的总敞口归一化组合收益判断；
-止盈在当日收盘后确认，新组合从下一交易日起生效，以避免使用日频收盘数据产生
-look-ahead bias。
+```text
+loser local weight = 1 / loser count in cluster
+winner and neutral local weight = 0
+portfolio weight = local weight / K
+```
+
+每个 cluster 的目标额度为 `1/K`。没有 loser 的 cluster 为 inactive，其额度保留为未投资现金，不分配给其他 clusters。因此组合实际总权重可能小于 1。
+
+Excel 工作表：
+
+- `Summary`
+- `Cluster_Allocations`
+- `Stock_Weights`
+
+第五、六阶段会在内存中重新运行动态 K、聚类和信号计算，不读取前一步 Excel，也不在 DuckDB 中保存这些下游结果。
+
+所有 Excel 导出在文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。
+
+## 查看 DuckDB
+
+在 IDE 中运行 `scripts/view_data.py`，或在命令行执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_data open
+```
+
+首次使用 DuckDB 官方本地 UI 时需要联网安装 `ui` 扩展。查看结束后回到启动终端按 Enter，停止 UI 并释放数据库。
+
+快速查看表行数和近期下载问题：
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_data inspect
+```
+
+当前 catalog：
+
+- `market_data`：`security_master`、`daily_prices`、`shares_outstanding`、`market_returns`、`daily_market_cap`、`universe_membership`；
+- `audit`：数据下载与预处理运行、设置、字段字典和下载问题；
+- `browse`：`daily_universe`、`latest_universe`、`daily_quality`；
+- `preprocessing`：逐日 beta/残差，以及按需缓存的快照元数据、残差、相关矩阵上三角和排除原因。
+
+`browse.daily_universe.strategy_return` 等于不含股息的 `price_return`。
+
+早期 `meta/raw/core/quality/browse` 五 schema 数据库可原地升级，无需重新下载：
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_data upgrade-catalog
+```
+
+升级前必须关闭 DuckDB UI。升级先复制到临时库并核对关键表行数，成功后才替换原文件。
+
+## 时间语义与防止前视偏差
+
+这是本项目最重要的约束：
+
+- 股票池在交易日 `T` 生效，但排名信息来自前一 SPY 交易日；
+- beta 可以在历史日 `t` 使用该日收盘收益，因为它只用于未来决策日的历史窗口；
+- 决策日 `T` 的任何相关矩阵、K、cluster、信号和权重都只使用 `T` 之前的数据；
+- 不使用未来股数向过去回填；
+- 缺失窗口不填零、不前向填充；
+- 当前阶段只生成决策日权重，尚未声称这些权重在 `T` 的哪个可交易时点成交。
+
+最后一点必须在回测阶段开始前明确。
+
+## 测试
+
+测试完全离线，不调用 Yahoo 网络接口：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+截至 2026-07-27，共 68 项测试，全部通过。测试覆盖：
+
+- 数据库失败安全发布和 catalog 升级；
+- Yahoo 字段规范化、普通股近似过滤和拆股处理；
+- `t-1` 股票池、历史股数和发行人单一股票线；
+- beta、残差、快照缓存、缺失窗口和相关矩阵质量；
+- 动态 K 的阈值与数值边界；
+- `SPONGE_sym` embedding、可复现性和求解失败；
+- winner/loser 严格阈值；
+- 只做多权重、inactive cluster 现金保留；
+- Excel 结构和禁止静默覆盖。
+
+## 代码结构
+
+```text
+src/
+  stat_arb_data/               数据获取、股票池、DuckDB
+  stat_arb_preprocessing/      beta、残差、相关矩阵快照
+  stat_arb_cluster_count/      动态 K
+  stat_arb_clustering/         SPONGE_sym
+  stat_arb_stock_selection/    winner / loser / neutral
+  stat_arb_portfolio_weights/  只做多权重
+scripts/                       IDE 入口
+tests/                         离线单元与集成测试
+references/                    主论文、notes、扩展论文和 PPT
+data/                          本地 DuckDB
+outputs/                       Excel 研究输出
+```
+
+## 已知限制与下一阶段
+
+当前最重要的限制：
+
+- Yahoo 当前候选集不能完整覆盖历史退市证券，存在 survivorship bias；
+- Yahoo 普通股筛选和发行人标识都是近似值；
+- 当前收益不含股息，与论文数据口径不同；
+- FF12 尚未填充；
+- 当前 SPONGE embedding 是作者代码兼容口径，不是论文文字口径；
+- `p=5%` 和只做多均为项目修改；
+- 尚未处理交易成本、滑点、停牌、退市、无法成交和现金收益；
+- 尚无跨日持仓与回测结果。
+
+notes 提议下一阶段使用 `l=3` 定期再平衡，并在组合收益达到 `q=5%` 时提前再平衡。实现前需要先确认权重生效时点、日收益口径、3 日计数、止盈累计方式、现金处理和异常证券处理。项目不会在这些规则未对齐时自行补出默认回测逻辑。

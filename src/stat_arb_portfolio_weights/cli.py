@@ -52,8 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument(
         "--deviation-threshold",
         type=float,
-        default=0.0,
-        help="Paper p in arithmetic-return units (0.01 means one percentage point)",
+        default=0.05,
+        help=(
+            "Project p in arithmetic-return units; defaults to 0.05 "
+            "(five percentage points; the paper baseline is 0)"
+        ),
     )
     export.add_argument(
         "--cluster-count-estimation-window",
