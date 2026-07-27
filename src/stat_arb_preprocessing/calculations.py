@@ -35,22 +35,84 @@ def build_snapshot_from_frames(
 
     residuals = daily_residuals.copy()
     residuals["trade_date"] = pd.to_datetime(residuals["trade_date"])
+    residuals["ticker"] = residuals["ticker"].astype(str)
+    membership_tickers = tuple(
+        str(value) for value in ordered_membership["ticker"]
+    )
+    membership_ranks = tuple(
+        int(value) for value in ordered_membership["market_cap_rank"]
+    )
 
-    for row in ordered_membership.itertuples(index=False):
-        ticker = str(row.ticker)
-        rank = int(row.market_cap_rank)
-        ticker_rows = (
-            residuals.loc[residuals["ticker"] == ticker]
-            .set_index("trade_date")
-            .reindex(expected_dates)
+    indexed = residuals.set_index(["trade_date", "ticker"]).sort_index()
+    expected_index = pd.MultiIndex.from_product(
+        (expected_dates, membership_tickers),
+        names=("trade_date", "ticker"),
+    )
+    aligned = indexed.reindex(expected_index)
+    wide_cache: dict[str, pd.DataFrame] = {}
+
+    def wide(column: str) -> pd.DataFrame:
+        if column not in wide_cache:
+            wide_cache[column] = (
+                aligned[column]
+                .unstack("ticker")
+                .reindex(index=expected_dates, columns=membership_tickers)
+            )
+        return wide_cache[column]
+
+    residual_matrix_all = wide("market_residual_return")
+    invalid_mask = (
+        ~wide("is_valid").eq(True)
+        | residual_matrix_all.isna()
+    )
+    incomplete = invalid_mask.any(axis=0)
+    invalid_reasons = wide("exclusion_reason").where(invalid_mask)
+    reason_values = invalid_reasons.to_numpy(dtype=object)
+    reason_present = ~pd.isna(reason_values)
+    has_reason = reason_present.any(axis=0)
+    first_reason_rows = reason_present.argmax(axis=0)
+    first_reason_values = np.full(len(membership_tickers), None, dtype=object)
+    reason_columns = np.flatnonzero(has_reason)
+    first_reason_values[reason_columns] = reason_values[
+        first_reason_rows[reason_columns],
+        reason_columns,
+    ]
+    first_invalid_reasons = dict(
+        zip(membership_tickers, first_reason_values, strict=True)
+    )
+
+    complete_tickers = [
+        ticker for ticker in membership_tickers if not bool(incomplete[ticker])
+    ]
+    zero_variance: dict[str, bool] = {}
+    if complete_tickers:
+        complete_values = (
+            residual_matrix_all.loc[:, complete_tickers]
+            .astype(float)
+            .to_numpy()
         )
-        invalid = ticker_rows.loc[
-            (~ticker_rows["is_valid"].fillna(False))
-            | ticker_rows["market_residual_return"].isna()
-        ]
-        if not invalid.empty:
-            raw_reason = invalid["exclusion_reason"].dropna()
-            reason = str(raw_reason.iloc[0]) if not raw_reason.empty else "missing_residual_row"
+        standard_deviations = np.std(complete_values, axis=0, ddof=1)
+        zero_variance = {
+            ticker: bool(standard_deviation <= config.variance_epsilon)
+            for ticker, standard_deviation in zip(
+                complete_tickers,
+                standard_deviations,
+                strict=True,
+            )
+        }
+
+    for ticker, rank in zip(
+        membership_tickers,
+        membership_ranks,
+        strict=True,
+    ):
+        if bool(incomplete[ticker]):
+            raw_reason = first_invalid_reasons[ticker]
+            reason = (
+                "missing_residual_row"
+                if pd.isna(raw_reason)
+                else str(raw_reason)
+            )
             exclusions.append(
                 {
                     "ticker": ticker,
@@ -58,10 +120,7 @@ def build_snapshot_from_frames(
                     "reason": f"incomplete_residual_window:{reason}",
                 }
             )
-            continue
-
-        values = ticker_rows["market_residual_return"].astype(float).to_numpy()
-        if float(np.std(values, ddof=1)) <= config.variance_epsilon:
+        elif zero_variance[ticker]:
             exclusions.append(
                 {
                     "ticker": ticker,
@@ -69,21 +128,17 @@ def build_snapshot_from_frames(
                     "reason": "zero_residual_variance",
                 }
             )
-            continue
-
-        valid_tickers.append(ticker)
-        ranks.append(rank)
+        else:
+            valid_tickers.append(ticker)
+            ranks.append(rank)
 
     if len(valid_tickers) < 2:
         raise ValueError(
             f"At least 2 valid stocks are required for {as_of_date}; got {len(valid_tickers)}"
         )
 
-    indexed = residuals.set_index(["trade_date", "ticker"]).sort_index()
-
     def matrix(column: str) -> pd.DataFrame:
-        wide = indexed[column].unstack("ticker")
-        return wide.reindex(index=expected_dates, columns=valid_tickers).astype(float)
+        return wide(column).reindex(columns=valid_tickers).astype(float)
 
     beta_matrix = matrix("beta")
     stock_return_matrix = matrix("stock_return")

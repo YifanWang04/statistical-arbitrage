@@ -15,11 +15,182 @@ from stat_arb_preprocessing import (
     build_preprocessing,
     get_snapshot,
 )
+from stat_arb_preprocessing.calculations import build_snapshot_from_frames
 from stat_arb_preprocessing.excel import export_snapshot_workbook
 from stat_arb_preprocessing.repository import EXPECTED_RETURN_BASIS
 
 
 class PreprocessingIntegrationTests(unittest.TestCase):
+    def test_vectorized_snapshot_matches_scalar_reference(self) -> None:
+        window_dates = tuple(
+            value.date()
+            for value in pd.bdate_range("2026-01-05", periods=5)
+        )
+        membership = pd.DataFrame(
+            [
+                {"ticker": "BBB", "market_cap_rank": 2},
+                {"ticker": "FFF", "market_cap_rank": 6},
+                {"ticker": "AAA", "market_cap_rank": 1},
+                {"ticker": "DDD", "market_cap_rank": 4},
+                {"ticker": "CCC", "market_cap_rank": 3},
+                {"ticker": "EEE", "market_cap_rank": 5},
+            ]
+        )
+        residual_patterns = {
+            "AAA": (0.01, 0.02, 0.03, 0.04, 0.05),
+            "BBB": (0.01, 0.04, 0.02, 0.05, 0.03),
+            "CCC": (0.02, 0.02, 0.02, 0.02, 0.02),
+            "DDD": (0.03, 0.01, 0.04, 0.02, 0.05),
+            "EEE": (0.05, 0.03, 0.01, 0.04, 0.02),
+            "FFF": (0.04, 0.02, 0.05, 0.01, 0.03),
+        }
+        rows: list[dict[str, object]] = []
+        for ticker, residual_values in residual_patterns.items():
+            for index, (trade_date, residual) in enumerate(
+                zip(window_dates, residual_values, strict=True)
+            ):
+                if ticker == "DDD" and index == 2:
+                    continue
+                is_valid = True
+                reason = None
+                if ticker == "EEE" and index in (1, 3):
+                    is_valid = False
+                    reason = "later_reason" if index == 3 else None
+                if ticker == "FFF" and index in (0, 4):
+                    is_valid = False
+                    reason = "early_reason" if index == 0 else "late_reason"
+                rows.append(
+                    {
+                        "trade_date": trade_date,
+                        "ticker": ticker,
+                        "market_cap_rank": next(
+                            int(row["market_cap_rank"])
+                            for row in membership.to_dict("records")
+                            if row["ticker"] == ticker
+                        ),
+                        "stock_return": residual + 0.001,
+                        "market_return": 0.001 * (index + 1),
+                        "beta": 1.0 + index / 10.0,
+                        "market_residual_return": residual,
+                        "is_valid": is_valid,
+                        "exclusion_reason": reason,
+                    }
+                )
+        daily_residuals = pd.DataFrame(rows).sample(
+            frac=1.0,
+            random_state=7,
+        )
+        config = PreprocessingConfig(
+            database_path=Path("unused.duckdb"),
+            correlation_window=5,
+        )
+
+        expected = _scalar_snapshot_expectations(
+            window_dates,
+            membership,
+            daily_residuals,
+            config.variance_epsilon,
+        )
+        snapshot = build_snapshot_from_frames(
+            preprocessing_run_id="test-run",
+            return_basis=EXPECTED_RETURN_BASIS,
+            as_of_date=date(2026, 1, 12),
+            window_dates=window_dates,
+            membership=membership,
+            daily_residuals=daily_residuals,
+            config=config,
+        )
+
+        self.assertEqual(snapshot.tickers, expected["tickers"])
+        self.assertEqual(snapshot.market_cap_ranks, expected["ranks"])
+        pd.testing.assert_frame_equal(snapshot.exclusions, expected["exclusions"])
+        pd.testing.assert_frame_equal(snapshot.beta_matrix, expected["beta"])
+        pd.testing.assert_frame_equal(
+            snapshot.stock_return_matrix,
+            expected["stock_return"],
+        )
+        pd.testing.assert_frame_equal(
+            snapshot.residual_matrix,
+            expected["market_residual_return"],
+        )
+        pd.testing.assert_series_equal(
+            snapshot.market_returns,
+            expected["market_return"],
+        )
+        pd.testing.assert_frame_equal(
+            snapshot.correlation_matrix,
+            expected["correlation"],
+        )
+        self.assertEqual(
+            snapshot.exclusions["reason"].tolist(),
+            [
+                "zero_residual_variance",
+                "incomplete_residual_window:missing_residual_row",
+                "incomplete_residual_window:later_reason",
+                "incomplete_residual_window:early_reason",
+            ],
+        )
+
+    def test_vectorized_snapshot_still_rejects_inconsistent_market_returns(
+        self,
+    ) -> None:
+        window_dates = tuple(
+            value.date()
+            for value in pd.bdate_range("2026-01-05", periods=5)
+        )
+        membership = pd.DataFrame(
+            [
+                {"ticker": "AAA", "market_cap_rank": 1},
+                {"ticker": "BBB", "market_cap_rank": 2},
+            ]
+        )
+        rows = [
+            {
+                "trade_date": trade_date,
+                "ticker": ticker,
+                "market_cap_rank": rank,
+                "stock_return": residual,
+                "market_return": (
+                    0.02
+                    if ticker == "BBB" and index == 2
+                    else 0.01
+                ),
+                "beta": 1.0,
+                "market_residual_return": residual,
+                "is_valid": True,
+                "exclusion_reason": None,
+            }
+            for rank, ticker in enumerate(("AAA", "BBB"), start=1)
+            for index, (trade_date, residual) in enumerate(
+                zip(
+                    window_dates,
+                    (
+                        (0.01, 0.02, 0.03, 0.04, 0.05)
+                        if ticker == "AAA"
+                        else (0.02, 0.01, 0.04, 0.03, 0.05)
+                    ),
+                    strict=True,
+                )
+            )
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Market returns are inconsistent",
+        ):
+            build_snapshot_from_frames(
+                preprocessing_run_id="test-run",
+                return_basis=EXPECTED_RETURN_BASIS,
+                as_of_date=date(2026, 1, 12),
+                window_dates=window_dates,
+                membership=membership,
+                daily_residuals=pd.DataFrame(rows),
+                config=PreprocessingConfig(
+                    database_path=Path("unused.duckdb"),
+                    correlation_window=5,
+                ),
+            )
+
     def test_build_computes_inclusive_beta_and_preserves_warmup_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database, dates = build_test_database(Path(directory))
@@ -443,6 +614,95 @@ class PreprocessingIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(parameters.max_column, 2)
             workbook.close()
+
+
+def _scalar_snapshot_expectations(
+    window_dates: tuple[date, ...],
+    membership: pd.DataFrame,
+    daily_residuals: pd.DataFrame,
+    variance_epsilon: float,
+) -> dict[str, object]:
+    ordered_membership = membership.sort_values(
+        "market_cap_rank"
+    ).reset_index(drop=True)
+    expected_dates = pd.Index(
+        pd.to_datetime(window_dates),
+        name="trade_date",
+    )
+    residuals = daily_residuals.copy()
+    residuals["trade_date"] = pd.to_datetime(residuals["trade_date"])
+    exclusions: list[dict[str, object]] = []
+    tickers: list[str] = []
+    ranks: list[int] = []
+
+    for row in ordered_membership.itertuples(index=False):
+        ticker = str(row.ticker)
+        rank = int(row.market_cap_rank)
+        ticker_rows = (
+            residuals.loc[residuals["ticker"] == ticker]
+            .set_index("trade_date")
+            .reindex(expected_dates)
+        )
+        invalid = ticker_rows.loc[
+            (~ticker_rows["is_valid"].eq(True))
+            | ticker_rows["market_residual_return"].isna()
+        ]
+        if not invalid.empty:
+            raw_reason = invalid["exclusion_reason"].dropna()
+            reason = (
+                str(raw_reason.iloc[0])
+                if not raw_reason.empty
+                else "missing_residual_row"
+            )
+            exclusions.append(
+                {
+                    "ticker": ticker,
+                    "market_cap_rank": rank,
+                    "reason": f"incomplete_residual_window:{reason}",
+                }
+            )
+            continue
+        values = ticker_rows[
+            "market_residual_return"
+        ].astype(float).to_numpy()
+        if float(np.std(values, ddof=1)) <= variance_epsilon:
+            exclusions.append(
+                {
+                    "ticker": ticker,
+                    "market_cap_rank": rank,
+                    "reason": "zero_residual_variance",
+                }
+            )
+            continue
+        tickers.append(ticker)
+        ranks.append(rank)
+
+    indexed = residuals.set_index(["trade_date", "ticker"]).sort_index()
+
+    def matrix(column: str) -> pd.DataFrame:
+        return (
+            indexed[column]
+            .unstack("ticker")
+            .reindex(index=expected_dates, columns=tickers)
+            .astype(float)
+        )
+
+    market_frame = matrix("market_return")
+    market_return = market_frame.iloc[:, 0].rename("SPY")
+    residual_matrix = matrix("market_residual_return")
+    return {
+        "tickers": tuple(tickers),
+        "ranks": tuple(ranks),
+        "exclusions": pd.DataFrame(
+            exclusions,
+            columns=("ticker", "market_cap_rank", "reason"),
+        ).sort_values("market_cap_rank", ignore_index=True),
+        "beta": matrix("beta"),
+        "stock_return": matrix("stock_return"),
+        "market_residual_return": residual_matrix,
+        "market_return": market_return,
+        "correlation": residual_matrix.corr(),
+    }
 
 
 def build_test_database(directory: Path) -> tuple[Path, pd.DatetimeIndex]:

@@ -1,13 +1,14 @@
 # Correlation Matrix Clustering 统计套利复刻
 
-本项目分阶段复刻 Cartea、Cucuringu 与 Jin 的论文 *Correlation Matrix Clustering for Statistical Arbitrage Portfolios*。当前代码已经贯通单个决策日的完整研究链路：
+本项目分阶段复刻 Cartea、Cucuringu 与 Jin 的论文 *Correlation Matrix Clustering for Statistical Arbitrage Portfolios*。当前代码已经贯通从点时信号到跨日回测的完整研究链路：
 
 ```text
 Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
           → SPONGE_sym clusters → winners / losers → 只做多权重
+          → 固定份额持仓 → l/q 事件再平衡 → SPY 与绩效评价
 ```
 
-目前已完成阶段 1–6；跨日再平衡和回测尚未实现。
+目前已完成阶段 1–7。
 
 ## 项目状态
 
@@ -19,7 +20,7 @@ Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
 | 4. Clustering | 已完成 | `SPONGE_sym` SigNet 兼容 embedding、k-means++ |
 | 5. Identify Stocks | 已完成 | previous winner / loser / neutral |
 | 6. Assign Weights | 已完成 | 单决策日、只做多、cluster 等额度 |
-| 7. Backtest & Rebalance | 未实现 | 待确认 `l=3`、`q=5%`、持仓时点和记账规则 |
+| 7. Backtest & Rebalance | 已完成 | 固定份额持仓、`l=3`、复利 `q=5%`、SPY 与无成本绩效评价 |
 
 ## 论文口径与当前项目口径
 
@@ -61,10 +62,11 @@ python -m venv .venv
 5. `scripts/export_clustering.py`
 6. `scripts/export_stock_selection.py`
 7. `scripts/export_portfolio_weights.py`
+8. `scripts/export_backtest.py`
 
 注意：
 
-- 所有导出脚本当前示例日期均为 `2026-07-17`，运行前应修改 `AS_OF_DATE`；
+- 单日导出脚本当前示例日期为 `2026-07-17`；回测脚本显式设置 `START_DATE` 和 `END_DATE`，运行前应核对；
 - 多个 IDE 导出脚本当前设置 `REPLACE_EXISTING=True`；
 - `run_data_download.py` 当前设置 `CANDIDATE_POOL_SIZE=1500`、`REPLACE_EXISTING_DATABASE=True`；
 - 这些是脚本内的当前设置，不是 CLI 的安全默认值。
@@ -255,6 +257,47 @@ Excel 工作表：
 
 所有 Excel 导出在文件已存在时默认拒绝覆盖；确认覆盖时增加 `--replace`。
 
+### 8. 跨日回测与再平衡
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_backtest export `
+  --database data\yahoo_market_data.duckdb `
+  --start-date 2026-07-13 `
+  --end-date 2026-07-17 `
+  --rebalance-period 3 `
+  --take-profit-threshold 0.05 `
+  --lookback-window 5 `
+  --deviation-threshold 0.05 `
+  --output outputs\step7_backtest\backtest_2026-07-13_2026-07-17.xlsx
+```
+
+`start-date` 和 `end-date` 均为纳入回测的 SPY 收益日期，必须显式提供且必须是 SPY 交易日。初始目标使用 `as_of_date=start_date`，所以信号只使用起始日前的数据。
+
+CLI 与 `scripts/export_backtest.py` 默认显示 `tqdm` 交易日进度、运行速度和预计剩余时间。CLI 自动化运行时可传入 `--no-progress` 关闭；Python API 的 `show_progress` 默认为 `False`。
+
+每轮组合按建仓时的经济份额持有，权重随价格自然漂移，不进行隐含的每日再平衡：
+
+- 获得 3 个日收益后，在第 3 日收盘边界执行定期换仓；
+- 第 1 或第 2 日的本轮复利净值收益达到 `5%` 时提前换仓；
+- 事件日收益归旧组合，新组合从下一 SPY 交易日起获得收益；
+- 第 3 日同时达到止盈阈值时仍记录为定期换仓；
+- inactive cluster 和未成交额度保留为零收益现金。
+
+缺少有效 Close 时，持仓按上一有效 Close 估值并冻结。事件日的冻结腿不参与新目标资本；可交易部分先换仓且不使用杠杆。仍属于新目标的冻结腿恢复后继续持有；已退出新目标的冻结腿恢复后卖为现金，不追补之前未完成的目标仓位。所有缺价、冻结、恢复和未成交行为写入审计表。
+
+Excel 工作表：
+
+- `Summary`
+- `Daily_Performance`
+- `Rebalance_Events`
+- `Target_Weights`
+- `Trades`
+- `Missing_Data_Audit`
+
+`Target_Weights` 只保存 `portfolio_weight > 0` 的实际做多股票，避免为每次换仓重复输出 previous winners、neutral 和其他零权重股票。单决策日的 stock-selection 与 portfolio-weight 报告仍保留完整横截面，便于核对分类和零权重规则。
+
+策略与 SPY 使用相同日期，风险利率和现金收益均为零。报告给出复利年化收益、年化 Sharpe 和按负收益样本标准差计算的 Sortino。回测结果只在内存中计算并导出 Excel，不写入 DuckDB。
+
 ## 查看 DuckDB
 
 在 IDE 中运行 `scripts/view_data.py`，或在命令行执行：
@@ -297,9 +340,8 @@ Excel 工作表：
 - 决策日 `T` 的任何相关矩阵、K、cluster、信号和权重都只使用 `T` 之前的数据；
 - 不使用未来股数向过去回填；
 - 缺失窗口不填零、不前向填充；
-- 当前阶段只生成决策日权重，尚未声称这些权重在 `T` 的哪个可交易时点成交。
-
-最后一点必须在回测阶段开始前明确。
+- 回测目标 `as_of_date=T` 只用至 `T-1` 的输入，并获得日期为 `T` 的 close-to-close 收益；
+- 事件日 `T` 先结算旧组合，再用截至 `T` 的信息形成 `T+1` 目标；新组合不重复获得 `T` 日收益。
 
 ## 测试
 
@@ -309,7 +351,7 @@ Excel 工作表：
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-27，共 68 项测试，全部通过。测试覆盖：
+截至 2026-07-27，共 85 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -319,6 +361,9 @@ Excel 工作表：
 - `SPONGE_sym` embedding、可复现性和求解失败；
 - winner/loser 严格阈值；
 - 只做多权重、inactive cluster 现金保留；
+- 固定份额漂移、`l=3`、`q=5%`、事件日收益归属和计数重置；
+- 缺价冻结、部分换仓、目标内恢复持有、目标外恢复清算、SPY 对齐和绩效公式；
+- 回测全链路只读 DuckDB 边界；
 - Excel 结构和禁止静默覆盖。
 
 ## 代码结构
@@ -331,6 +376,7 @@ src/
   stat_arb_clustering/         SPONGE_sym
   stat_arb_stock_selection/    winner / loser / neutral
   stat_arb_portfolio_weights/  只做多权重
+  stat_arb_backtest/           跨日状态、l/q 再平衡、绩效与审计报告
 scripts/                       IDE 入口
 tests/                         离线单元与集成测试
 references/                    主论文、notes、扩展论文和 PPT
@@ -348,7 +394,8 @@ outputs/                       Excel 研究输出
 - FF12 尚未填充；
 - 当前 SPONGE embedding 是作者代码兼容口径，不是论文文字口径；
 - `p=5%` 和只做多均为项目修改；
-- 尚未处理交易成本、滑点、停牌、退市、无法成交和现金收益；
-- 尚无跨日持仓与回测结果。
+- 回测尚未加入交易成本、滑点、融资利息和正现金收益；
+- 缺价使用冻结及按新目标决定恢复持有/清算的规则，但 Yahoo 不提供可靠的历史退市收益，因此永久退市风险仍无法严格复刻；
+- FF12 基准尚未实现。
 
-notes 提议下一阶段使用 `l=3` 定期再平衡，并在组合收益达到 `q=5%` 时提前再平衡。实现前需要先确认权重生效时点、日收益口径、3 日计数、止盈累计方式、现金处理和异常证券处理。项目不会在这些规则未对齐时自行补出默认回测逻辑。
+第七步是 **Yahoo Approximate Price-Return、SigNet-compatible、Long-only、No-cost** 项目基线，不应与论文的 CRSP 多空市场中性结果直接等同。交易成本、滑点和 FF12 应作为后续独立口径加入并保留无成本对照。

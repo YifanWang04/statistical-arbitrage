@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=2.2,<3",
     "scikit-learn>=1.5,<2",
     "scipy>=1.13,<2",
+    "tqdm>=4.66,<5",
     "yfinance>=0.2.54,<2",
 ]
 
@@ -23,6 +24,7 @@ stat-arb-cluster-count = "stat_arb_cluster_count.cli:main"
 stat-arb-clustering = "stat_arb_clustering.cli:main"
 stat-arb-stock-selection = "stat_arb_stock_selection.cli:main"
 stat-arb-portfolio-weights = "stat_arb_portfolio_weights.cli:main"
+stat-arb-backtest = "stat_arb_backtest.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
