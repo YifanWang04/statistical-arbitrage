@@ -25,6 +25,7 @@ stat-arb-clustering = "stat_arb_clustering.cli:main"
 stat-arb-stock-selection = "stat_arb_stock_selection.cli:main"
 stat-arb-portfolio-weights = "stat_arb_portfolio_weights.cli:main"
 stat-arb-backtest = "stat_arb_backtest.cli:main"
+stat-arb-grid-backtest = "stat_arb_grid_backtest.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

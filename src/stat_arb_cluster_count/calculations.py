@@ -21,7 +21,22 @@ def calculate_cluster_count(
     snapshot: PreprocessingSnapshot,
     variance_threshold: float = DEFAULT_VARIANCE_THRESHOLD,
 ) -> ClusterCountResult:
-    threshold = _validate_variance_threshold(variance_threshold)
+    return calculate_cluster_counts(
+        snapshot,
+        (variance_threshold,),
+    )[0]
+
+
+def calculate_cluster_counts(
+    snapshot: PreprocessingSnapshot,
+    variance_thresholds: tuple[float, ...] | list[float],
+) -> tuple[ClusterCountResult, ...]:
+    thresholds = tuple(
+        _validate_variance_threshold(value)
+        for value in variance_thresholds
+    )
+    if not thresholds:
+        raise ValueError("variance_thresholds must not be empty")
     tickers = tuple(map(str, snapshot.tickers))
     matrix = snapshot.correlation_matrix
     expected_shape = (len(tickers), len(tickers))
@@ -85,10 +100,6 @@ def calculate_cluster_count(
     cumulative_variance_array = np.cumsum(effective_eigenvalues_array)
     cumulative_explained_ratio_array = cumulative_variance_array / total_variance
     cumulative_explained_ratio_array[-1] = 1.0
-    qualifying = np.flatnonzero(cumulative_explained_ratio_array >= threshold)
-    if qualifying.size == 0:
-        raise RuntimeError("no cluster count reaches the variance threshold")
-    selected_k = int(qualifying[0]) + 1
 
     quality = ClusterCountQuality(
         maximum_asymmetry=maximum_asymmetry,
@@ -105,29 +116,45 @@ def calculate_cluster_count(
             )
         ),
     )
-    return ClusterCountResult(
-        as_of_date=snapshot.as_of_date,
-        window_start=snapshot.window_start,
-        window_end=snapshot.window_end,
-        snapshot_id=snapshot.snapshot_id,
-        preprocessing_run_id=snapshot.preprocessing_run_id,
-        beta_window=snapshot.beta_window,
-        cluster_count_estimation_window=snapshot.correlation_window,
-        return_basis=snapshot.return_basis,
-        source_calculation_version=snapshot.calculation_version,
-        calculation_version=CALCULATION_VERSION,
-        tickers=tickers,
-        variance_threshold=threshold,
-        raw_eigenvalues=tuple(map(float, raw_eigenvalues_array)),
-        effective_eigenvalues=tuple(map(float, effective_eigenvalues_array)),
-        cumulative_variance=tuple(map(float, cumulative_variance_array)),
-        cumulative_explained_ratio=tuple(
-            map(float, cumulative_explained_ratio_array)
-        ),
-        total_variance=total_variance,
-        selected_k=selected_k,
-        quality=quality,
+    raw_eigenvalues = tuple(map(float, raw_eigenvalues_array))
+    effective_eigenvalues = tuple(map(float, effective_eigenvalues_array))
+    cumulative_variance = tuple(map(float, cumulative_variance_array))
+    cumulative_explained_ratio = tuple(
+        map(float, cumulative_explained_ratio_array)
     )
+    results: list[ClusterCountResult] = []
+    for threshold in thresholds:
+        qualifying = np.flatnonzero(
+            cumulative_explained_ratio_array >= threshold
+        )
+        if qualifying.size == 0:
+            raise RuntimeError(
+                "no cluster count reaches the variance threshold"
+            )
+        results.append(
+            ClusterCountResult(
+                as_of_date=snapshot.as_of_date,
+                window_start=snapshot.window_start,
+                window_end=snapshot.window_end,
+                snapshot_id=snapshot.snapshot_id,
+                preprocessing_run_id=snapshot.preprocessing_run_id,
+                beta_window=snapshot.beta_window,
+                cluster_count_estimation_window=snapshot.correlation_window,
+                return_basis=snapshot.return_basis,
+                source_calculation_version=snapshot.calculation_version,
+                calculation_version=CALCULATION_VERSION,
+                tickers=tickers,
+                variance_threshold=threshold,
+                raw_eigenvalues=raw_eigenvalues,
+                effective_eigenvalues=effective_eigenvalues,
+                cumulative_variance=cumulative_variance,
+                cumulative_explained_ratio=cumulative_explained_ratio,
+                total_variance=total_variance,
+                selected_k=int(qualifying[0]) + 1,
+                quality=quality,
+            )
+        )
+    return tuple(results)
 
 
 def _validate_variance_threshold(value: float) -> float:

@@ -6,9 +6,10 @@
 Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
           → SPONGE_sym clusters → winners / losers → 只做多权重
           → 固定份额持仓 → l/q 事件再平衡 → SPY 与绩效评价
+          → w/p/P/l/q 网格回测 → 指标排名
 ```
 
-目前已完成阶段 1–7。
+目前已完成阶段 1–8。
 
 ## 项目状态
 
@@ -21,6 +22,7 @@ Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
 | 5. Identify Stocks | 已完成 | previous winner / loser / neutral |
 | 6. Assign Weights | 已完成 | 单决策日、只做多、cluster 等额度 |
 | 7. Backtest & Rebalance | 已完成 | 固定份额持仓、`l=3`、复利 `q=5%`、SPY 与无成本绩效评价 |
+| 8. Grid Backtest | 已完成 | 统一样本、五参数网格、完整风险收益/基准/运营指标与 Sharpe 排名 |
 
 ## 论文口径与当前项目口径
 
@@ -63,10 +65,11 @@ python -m venv .venv
 6. `scripts/export_stock_selection.py`
 7. `scripts/export_portfolio_weights.py`
 8. `scripts/export_backtest.py`
+9. `scripts/export_grid_backtest.py`
 
 注意：
 
-- 单日导出脚本当前示例日期为 `2026-07-17`；回测脚本显式设置 `START_DATE` 和 `END_DATE`，运行前应核对；
+- 单日导出脚本当前示例日期为 `2026-07-17`；第七步回测脚本显式设置起止日，第八步网格脚本默认使用数据库最新 SPY 日及此前三个日历年；
 - 多个 IDE 导出脚本当前设置 `REPLACE_EXISTING=True`；
 - `run_data_download.py` 当前设置 `CANDIDATE_POOL_SIZE=1500`、`REPLACE_EXISTING_DATABASE=True`；
 - 这些是脚本内的当前设置，不是 CLI 的安全默认值。
@@ -302,6 +305,45 @@ Excel 默认采用精简视图：`Summary` 把策略与 SPY 指标并排展示�
 
 策略与 SPY 使用相同日期，风险利率和现金收益均为零。报告给出复利年化收益、年化 Sharpe 和按负收益样本标准差计算的 Sortino。回测结果只在内存中计算并导出 Excel，不写入 DuckDB。
 
+### 9. 第八步五参数网格回测
+
+默认网格为：
+
+```text
+w = [5, 10, 20]
+p = [0, 0.05]
+P = [0.85, 0.90]
+l = [3, 5, 10]
+q = [0.03, 0.05]
+```
+
+共 72 组。默认结束日取数据库最新 SPY 交易日，开始请求日为结束日前三个日历年；也可以显式指定统一样本区间：
+
+```powershell
+.\.venv\Scripts\python.exe -m stat_arb_grid_backtest export `
+  --database data\yahoo_market_data.duckdb `
+  --start-date 2023-07-27 `
+  --end-date 2026-07-27 `
+  --lookback-windows 5 10 20 `
+  --deviation-thresholds 0 0.05 `
+  --variance-thresholds 0.85 0.90 `
+  --rebalance-periods 3 5 10 `
+  --take-profit-thresholds 0.03 0.05 `
+  --output outputs\step8_grid_backtest\grid_backtest_2023-07-27_2026-07-27.xlsx
+```
+
+结果先按 Sharpe、再按年化收益、最大回撤绝对值和稳定 `run_id` 排名。每组输出收益、波动率、Sharpe、Sortino、Calmar、最大回撤、收益分布、95% VaR/CVaR、SPY 相对指标、再平衡、暴露、缺价和换手率。零波动或分母无效的比率留空。
+
+Excel 工作表：
+
+- `Summary`
+- `Grid_Results`
+- `Parameter_Grid`
+- `Metric_Definitions`
+- `Checks`
+
+第八步复用第七步的持仓状态机，并在内存中复用动态 K 特征谱、相关矩阵快照、聚类和不同 `p` 的目标。它不导出每组日度或交易明细，不把最佳参数回写为项目默认值，也不在 DuckDB 中创建网格结果表。
+
 ## 查看 DuckDB
 
 在 IDE 中运行 `scripts/view_data.py`，或在命令行执行：
@@ -355,7 +397,7 @@ Excel 默认采用精简视图：`Summary` 把策略与 SPY 指标并排展示�
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-28，共 89 项测试，全部通过。测试覆盖：
+截至 2026-07-28，共 100 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -370,6 +412,7 @@ Excel 默认采用精简视图：`Summary` 把策略与 SPY 指标并排展示�
 - 回测全链路只读 DuckDB 边界；
 - FIFO 买入 lot、部分卖出、跨 lot 卖出、最终卖价和已实现收益；
 - Excel 精简视图、隐藏技术审计列、合并动作表、持仓周期表和禁止静默覆盖。
+- 五参数网格组合、默认三年样本、缓存复用、完整指标、Sharpe 排名及五表 Excel 报告。
 
 ## 代码结构
 
@@ -382,6 +425,7 @@ src/
   stat_arb_stock_selection/    winner / loser / neutral
   stat_arb_portfolio_weights/  只做多权重
   stat_arb_backtest/           跨日状态、l/q 再平衡、绩效与审计报告
+  stat_arb_grid_backtest/      五参数网格、完整指标、排名与 Excel 报告
 scripts/                       IDE 入口
 tests/                         离线单元与集成测试
 references/                    主论文、notes、扩展论文和 PPT

@@ -13,6 +13,7 @@ import pandas as pd
 from stat_arb_cluster_count import (
     DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW,
     calculate_cluster_count,
+    calculate_cluster_counts,
     calculate_cluster_count_for_date,
 )
 from stat_arb_cluster_count.excel import export_cluster_count_workbook
@@ -26,6 +27,25 @@ from tests.test_preprocessing import build_test_database
 
 
 class ClusterCountCalculationTests(unittest.TestCase):
+    def test_batch_thresholds_match_independent_single_thresholds(self) -> None:
+        snapshot = make_snapshot(
+            np.array(
+                [
+                    [1.0, 0.5, 0.5],
+                    [0.5, 1.0, 0.5],
+                    [0.5, 0.5, 1.0],
+                ]
+            )
+        )
+
+        batch = calculate_cluster_counts(snapshot, (0.70, 0.90))
+        singles = tuple(
+            calculate_cluster_count(snapshot, threshold)
+            for threshold in (0.70, 0.90)
+        )
+
+        self.assertEqual(batch, singles)
+
     def test_selects_minimum_k_that_reaches_threshold(self) -> None:
         snapshot = make_snapshot(
             np.array(
