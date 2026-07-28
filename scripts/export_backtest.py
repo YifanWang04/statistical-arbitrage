@@ -18,8 +18,8 @@ from stat_arb_stock_selection import StockSelectionConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
-START_DATE = date(2021, 1, 4)
-END_DATE = date(2026, 7, 17)
+START_DATE = date(2025, 1, 1)
+END_DATE = date(2026, 7, 27)
 REBALANCE_PERIOD = 3
 TAKE_PROFIT_THRESHOLD = 0.05
 INITIAL_NAV = 1.0

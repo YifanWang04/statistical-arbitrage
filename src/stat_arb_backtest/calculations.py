@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 import math
 
@@ -17,6 +17,7 @@ from .models import (
     DailyPerformance,
     MissingDataAudit,
     PerformanceMetrics,
+    PositionLotRecord,
     RebalanceEvent,
     TargetWeightRecord,
     TradeRecord,
@@ -25,6 +26,7 @@ from .models import (
 
 CALCULATION_VERSION = "long_only_close_to_close_stateful_v2"
 TargetProvider = Callable[[date], BacktestTarget]
+UNIT_TOLERANCE = 1e-12
 
 
 @dataclass
@@ -37,6 +39,27 @@ class _Position:
     @property
     def value(self) -> float:
         return self.units * self.last_valid_close
+
+
+@dataclass
+class _OpenPositionLot:
+    lot_id: str
+    ticker: str
+    buy_trade_id: int
+    buy_event_id: int | None
+    buy_date: date
+    buy_price: float
+    bought_units: float
+    buy_notional: float
+    sold_units: float = 0.0
+    sale_proceeds: float = 0.0
+    first_sell_date: date | None = None
+    final_sell_date: date | None = None
+    final_sell_price: float | None = None
+
+    @property
+    def remaining_units(self) -> float:
+        return max(self.bought_units - self.sold_units, 0.0)
 
 
 def simulate_backtest(
@@ -77,6 +100,11 @@ def simulate_backtest(
                     trade_notional=desired_value,
                     status="unfilled_missing_close",
                     reason="initial",
+                    execution_price=None,
+                    units_before=0.0,
+                    units_traded=0.0,
+                    units_after=0.0,
+                    executed_notional=0.0,
                 )
             )
             missing_audit.append(
@@ -94,8 +122,9 @@ def simulate_backtest(
                 )
             )
             continue
+        bought_units = desired_value / close
         positions[target.ticker] = _Position(
-            units=desired_value / close,
+            units=bought_units,
             last_valid_close=close,
         )
         cash -= desired_value
@@ -110,6 +139,11 @@ def simulate_backtest(
                 trade_notional=desired_value,
                 status="executed",
                 reason="initial",
+                execution_price=close,
+                units_before=0.0,
+                units_traded=bought_units,
+                units_after=bought_units,
+                executed_notional=desired_value,
             )
         )
     if abs(cash) < 1e-12:
@@ -159,6 +193,7 @@ def simulate_backtest(
                 position.is_frozen = False
                 if position.pending_liquidation:
                     recovered_value = position.value
+                    recovered_units = position.units
                     cash += recovered_value
                     trades.append(
                         TradeRecord(
@@ -171,6 +206,11 @@ def simulate_backtest(
                             trade_notional=recovered_value,
                             status="executed",
                             reason="recovery_liquidation",
+                            execution_price=close,
+                            units_before=recovered_units,
+                            units_traded=recovered_units,
+                            units_after=0.0,
+                            executed_notional=recovered_value,
                         )
                     )
                     missing_audit.append(
@@ -324,12 +364,19 @@ def simulate_backtest(
         daily[-1].spy_nav,
         config.annualization_sessions,
     )
+    numbered_trades = tuple(
+        replace(trade, trade_id=trade_id)
+        for trade_id, trade in enumerate(trades, start=1)
+    )
+    position_lots = _build_position_lots(numbered_trades)
     return BacktestResult(
         config=config,
         daily_performance=tuple(daily),
         rebalance_events=tuple(events),
         target_weights=tuple(target_records),
-        trades=tuple(trades),
+        trades=numbered_trades,
+        position_lots=position_lots,
+        fifo_reconciliation_status="OK",
         missing_data_audit=tuple(missing_audit),
         strategy_metrics=strategy_metrics,
         spy_metrics=spy_metrics,
@@ -426,6 +473,11 @@ def _rebalance_positions(
                     trade_notional=desired_value,
                     status="unfilled_missing_close",
                     reason=reason,
+                    execution_price=None,
+                    units_before=0.0,
+                    units_traded=0.0,
+                    units_after=0.0,
+                    executed_notional=0.0,
                 )
             )
             audit.append(
@@ -461,12 +513,15 @@ def _rebalance_positions(
         close = _finite_close(closes, trade_date, ticker)
         if close is None:
             raise RuntimeError("tradable position unexpectedly has no close")
+        units_before = positions[ticker].units
+        units_after = 0.0 if desired <= 1e-14 else desired / close
+        units_traded = units_before - units_after
         cash += reduction
         if desired <= 1e-14:
             positions.pop(ticker, None)
         else:
             positions[ticker] = _Position(
-                units=desired / close,
+                units=units_after,
                 last_valid_close=close,
             )
         trades.append(
@@ -480,6 +535,11 @@ def _rebalance_positions(
                 trade_notional=reduction,
                 status="executed",
                 reason=reason,
+                execution_price=close,
+                units_before=units_before,
+                units_traded=units_traded,
+                units_after=units_after,
+                executed_notional=reduction,
             )
         )
 
@@ -494,9 +554,12 @@ def _rebalance_positions(
         close = _finite_close(closes, trade_date, ticker)
         if close is None:
             raise RuntimeError("target position unexpectedly has no close")
+        units_before = positions[ticker].units if ticker in positions else 0.0
+        units_after = desired / close
+        units_traded = units_after - units_before
         cash -= increase
         positions[ticker] = _Position(
-            units=desired / close,
+            units=units_after,
             last_valid_close=close,
         )
         trades.append(
@@ -510,12 +573,183 @@ def _rebalance_positions(
                 trade_notional=increase,
                 status="executed",
                 reason=reason,
+                execution_price=close,
+                units_before=units_before,
+                units_traded=units_traded,
+                units_after=units_after,
+                executed_notional=increase,
             )
         )
 
     if cash < 0.0 and abs(cash) < 1e-12:
         cash = 0.0
     return positions, cash, trades, audit, frozen_value
+
+
+def _build_position_lots(
+    trades: tuple[TradeRecord, ...],
+) -> tuple[PositionLotRecord, ...]:
+    open_lots: dict[str, list[_OpenPositionLot]] = {}
+    all_lots: list[_OpenPositionLot] = []
+    bought_units_by_ticker: dict[str, float] = {}
+    sold_units_by_ticker: dict[str, float] = {}
+
+    for trade in trades:
+        if trade.status != "executed":
+            if (
+                trade.execution_price is not None
+                or abs(trade.units_traded) > UNIT_TOLERANCE
+                or abs(trade.executed_notional) > UNIT_TOLERANCE
+            ):
+                raise RuntimeError("unfilled trade contains executed values")
+            continue
+        price = trade.execution_price
+        if (
+            price is None
+            or not math.isfinite(price)
+            or price <= 0.0
+            or not math.isfinite(trade.units_traded)
+            or trade.units_traded <= UNIT_TOLERANCE
+        ):
+            raise RuntimeError("executed trade must have positive price and units")
+        expected_notional = price * trade.units_traded
+        if not math.isclose(
+            expected_notional,
+            trade.executed_notional,
+            rel_tol=1e-10,
+            abs_tol=1e-12,
+        ):
+            raise RuntimeError("trade price, units, and notional do not reconcile")
+        expected_units = (
+            trade.units_after - trade.units_before
+            if trade.side == "BUY"
+            else trade.units_before - trade.units_after
+        )
+        if not math.isclose(
+            expected_units,
+            trade.units_traded,
+            rel_tol=1e-10,
+            abs_tol=1e-12,
+        ):
+            raise RuntimeError("trade before/after units do not reconcile")
+
+        if trade.side == "BUY":
+            lot = _OpenPositionLot(
+                lot_id=f"LOT{len(all_lots) + 1:06d}",
+                ticker=trade.ticker,
+                buy_trade_id=trade.trade_id,
+                buy_event_id=trade.event_id,
+                buy_date=trade.trade_date,
+                buy_price=price,
+                bought_units=trade.units_traded,
+                buy_notional=trade.executed_notional,
+            )
+            all_lots.append(lot)
+            open_lots.setdefault(trade.ticker, []).append(lot)
+            bought_units_by_ticker[trade.ticker] = (
+                bought_units_by_ticker.get(trade.ticker, 0.0)
+                + trade.units_traded
+            )
+            continue
+        if trade.side != "SELL":
+            raise RuntimeError(f"unsupported executed trade side: {trade.side}")
+
+        sold_units_by_ticker[trade.ticker] = (
+            sold_units_by_ticker.get(trade.ticker, 0.0)
+            + trade.units_traded
+        )
+        units_to_match = trade.units_traded
+        ticker_lots = open_lots.setdefault(trade.ticker, [])
+        while units_to_match > UNIT_TOLERANCE and ticker_lots:
+            lot = ticker_lots[0]
+            allocated_units = min(units_to_match, lot.remaining_units)
+            if lot.first_sell_date is None:
+                lot.first_sell_date = trade.trade_date
+            lot.sold_units += allocated_units
+            lot.sale_proceeds += allocated_units * price
+            units_to_match -= allocated_units
+            if lot.remaining_units <= UNIT_TOLERANCE:
+                lot.sold_units = lot.bought_units
+                lot.final_sell_date = trade.trade_date
+                lot.final_sell_price = price
+                ticker_lots.pop(0)
+        if units_to_match > UNIT_TOLERANCE:
+            raise RuntimeError(
+                f"FIFO sell exceeds open buy lots for {trade.ticker}"
+            )
+
+    lot_records: list[PositionLotRecord] = []
+    remaining_units_by_ticker: dict[str, float] = {}
+    for lot in all_lots:
+        sold_units = min(lot.sold_units, lot.bought_units)
+        remaining_units = max(lot.bought_units - sold_units, 0.0)
+        if sold_units <= UNIT_TOLERANCE:
+            status = "OPEN"
+        elif remaining_units <= UNIT_TOLERANCE:
+            status = "CLOSED"
+        else:
+            status = "PARTIALLY_CLOSED"
+        matched_sell_vwap = (
+            lot.sale_proceeds / sold_units
+            if sold_units > UNIT_TOLERANCE
+            else None
+        )
+        realized_pnl = lot.sale_proceeds - sold_units * lot.buy_price
+        realized_return = (
+            realized_pnl / (sold_units * lot.buy_price)
+            if sold_units > UNIT_TOLERANCE
+            else None
+        )
+        lot_return = (
+            lot.sale_proceeds / lot.buy_notional - 1.0
+            if status == "CLOSED"
+            else None
+        )
+        remaining_units_by_ticker[lot.ticker] = (
+            remaining_units_by_ticker.get(lot.ticker, 0.0)
+            + remaining_units
+        )
+        lot_records.append(
+            PositionLotRecord(
+                lot_id=lot.lot_id,
+                ticker=lot.ticker,
+                buy_trade_id=lot.buy_trade_id,
+                buy_event_id=lot.buy_event_id,
+                buy_date=lot.buy_date,
+                buy_price=lot.buy_price,
+                bought_units=lot.bought_units,
+                buy_notional=lot.buy_notional,
+                sold_units=sold_units,
+                remaining_units=remaining_units,
+                first_sell_date=lot.first_sell_date,
+                final_sell_date=lot.final_sell_date,
+                matched_sell_vwap=matched_sell_vwap,
+                final_sell_price=lot.final_sell_price,
+                sale_proceeds=lot.sale_proceeds,
+                realized_pnl=realized_pnl,
+                realized_return=realized_return,
+                lot_return=lot_return,
+                status=status,
+            )
+        )
+
+    tickers = set(bought_units_by_ticker) | set(sold_units_by_ticker)
+    for ticker in tickers:
+        expected_remaining = (
+            bought_units_by_ticker.get(ticker, 0.0)
+            - sold_units_by_ticker.get(ticker, 0.0)
+        )
+        observed_remaining = remaining_units_by_ticker.get(ticker, 0.0)
+        if not math.isclose(
+            expected_remaining,
+            observed_remaining,
+            rel_tol=1e-10,
+            abs_tol=1e-12,
+        ):
+            raise RuntimeError(
+                f"FIFO remaining units do not reconcile for {ticker}"
+            )
+    return tuple(lot_records)
 
 
 def calculate_performance_metrics(

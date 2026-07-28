@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 import os
 from pathlib import Path
@@ -10,7 +11,12 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .models import BacktestResult, PerformanceMetrics
+from .models import (
+    BacktestResult,
+    RebalanceEvent,
+    TargetWeightRecord,
+    TradeRecord,
+)
 
 
 NAVY = "1F4E78"
@@ -43,6 +49,8 @@ PERCENT_FORMAT = "0.0000%"
 WEIGHT_FORMAT = "0.000000"
 NAV_FORMAT = "0.000000"
 RATIO_FORMAT = "0.0000"
+PRICE_FORMAT = "0.000000"
+UNIT_FORMAT = "0.000000"
 
 
 def export_backtest_workbook(
@@ -63,16 +71,18 @@ def export_backtest_workbook(
     summary = workbook.create_sheet("Summary")
     daily = workbook.create_sheet("Daily_Performance")
     events = workbook.create_sheet("Rebalance_Events")
-    targets = workbook.create_sheet("Target_Weights")
-    trades = workbook.create_sheet("Trades")
+    actions = workbook.create_sheet("Portfolio_Actions")
+    lots = workbook.create_sheet("Position_Lots")
     missing = workbook.create_sheet("Missing_Data_Audit")
 
     _write_summary(summary, result)
     _write_daily_performance(daily, result)
     _write_rebalance_events(events, result)
-    _write_target_weights(targets, result)
-    _write_trades(trades, result)
+    _write_portfolio_actions(actions, result)
+    _write_position_lots(lots, result)
     _write_missing_data(missing, result)
+    if not result.missing_data_audit:
+        missing.sheet_state = "hidden"
 
     temporary_path: Path | None = None
     try:
@@ -99,67 +109,14 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
     missing_days = sum(
         row.missing_position_count > 0 for row in result.daily_performance
     )
-    rows = [
-        ("Backtest setup", None),
-        ("Start date", config.start_date),
-        ("End date", config.end_date),
-        ("Return sessions", strategy.session_count),
-        ("Rebalance period l", config.rebalance_period),
-        ("Take-profit threshold q", config.take_profit_threshold),
-        ("Initial NAV", config.initial_nav),
-        ("Annualization sessions", config.annualization_sessions),
-        ("Missing-price policy", config.missing_price_policy),
-        (None, None),
-        ("Confirmed time semantics", None),
-        (
-            "Target formation",
-            "as_of_date=T uses inputs through T-1; target earns return dated T",
-        ),
-        (
-            "Event boundary",
-            "old portfolio earns event-date return; new target starts next session",
-        ),
-        (
-            "Holding convention",
-            "fixed economic units between events; weights drift with close prices",
-        ),
-        ("Cash return", "0%"),
-        ("Transaction costs and slippage", "not included"),
-        (None, None),
-        ("Strategy performance", None),
-        *_metric_rows("Strategy", strategy),
-        (None, None),
-        ("SPY performance", None),
-        *_metric_rows("SPY", spy),
-        (None, None),
-        ("Audit and QC", None),
-        ("Rebalance events", len(result.rebalance_events)),
-        ("Target-weight rows", len(result.target_weights)),
-        ("Trade rows", len(result.trades)),
-        ("Missing-price audit rows", len(result.missing_data_audit)),
-        ("Sessions with frozen positions", missing_days),
-        ("Metrics contain infinities", "NO"),
-        ("Overall QC", _overall_qc(result)),
-        (None, None),
-        ("Research scope", None),
-        (
-            "Project convention",
-            "Yahoo Close price return; p=5%; long-only losers; inactive clusters cash",
-        ),
-        ("FF12 benchmark", "not produced because ff12_code is currently empty"),
-        ("Risk-free rate", "0, following the paper"),
-        ("Calculation version", result.calculation_version),
-        (
-            "Paper",
-            "https://ora.ox.ac.uk/objects/uuid%3Ac60358c0-24f0-4c66-b973-f84776f66f8a",
-        ),
-        (
-            "Author clustering code",
-            "https://github.com/maxclchen/Correlation-Matrix-Clustering-for-Statistical-Arbitrage-Portfolios",
-        ),
-    ]
+    portfolio_action_count = len(_portfolio_action_rows(result))
+    lot_counts = {
+        status: sum(lot.status == status for lot in result.position_lots)
+        for status in ("CLOSED", "PARTIALLY_CLOSED", "OPEN")
+    }
+    overall_qc = _overall_qc(result)
 
-    sheet.merge_cells("A1:B1")
+    sheet.merge_cells("A1:D1")
     sheet["A1"] = (
         f"Step 7 Backtest — {config.start_date.isoformat()} to "
         f"{config.end_date.isoformat()}"
@@ -168,96 +125,241 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
     sheet["A1"].font = Font(color=WHITE, bold=True, size=15)
     sheet["A1"].alignment = Alignment(vertical="center")
     sheet.row_dimensions[1].height = 28
-    for row in rows:
-        sheet.append(row)
 
-    section_labels = {
-        "Backtest setup",
-        "Confirmed time semantics",
-        "Strategy performance",
-        "SPY performance",
-        "Audit and QC",
-        "Research scope",
-    }
-    for row in range(2, sheet.max_row + 1):
-        label = sheet.cell(row, 1).value
-        if label in section_labels:
-            sheet.merge_cells(
-                start_row=row,
-                start_column=1,
-                end_row=row,
-                end_column=2,
-            )
-            cell = sheet.cell(row, 1)
-            cell.fill = SECTION_FILL
-            cell.font = Font(bold=True, color=NAVY)
-            cell.border = HEADER_BORDER
-        elif label is not None:
-            sheet.cell(row, 1).font = Font(bold=True)
+    _write_summary_section(sheet, 3, "Performance")
+    performance_rows = (
+        ("Metric", "Strategy", "SPY", "Difference"),
+        (
+            "Starting NAV",
+            strategy.starting_nav,
+            spy.starting_nav,
+            strategy.starting_nav - spy.starting_nav,
+        ),
+        (
+            "Ending NAV",
+            strategy.ending_nav,
+            spy.ending_nav,
+            strategy.ending_nav - spy.ending_nav,
+        ),
+        (
+            "Total return",
+            strategy.total_return,
+            spy.total_return,
+            strategy.total_return - spy.total_return,
+        ),
+        (
+            "Annualized return",
+            strategy.annualized_return,
+            spy.annualized_return,
+            _optional_difference(
+                strategy.annualized_return,
+                spy.annualized_return,
+            ),
+        ),
+        (
+            "Sharpe ratio",
+            strategy.sharpe_ratio,
+            spy.sharpe_ratio,
+            _optional_difference(strategy.sharpe_ratio, spy.sharpe_ratio),
+        ),
+        (
+            "Sortino ratio",
+            strategy.sortino_ratio,
+            spy.sortino_ratio,
+            _optional_difference(strategy.sortino_ratio, spy.sortino_ratio),
+        ),
+    )
+    for row_number, values in enumerate(performance_rows, start=4):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, value=value)
+    _style_summary_header(sheet, "A4:D4")
+    for row in range(5, 11):
+        sheet.cell(row, 1).font = Font(bold=True)
+        if row % 2 == 0:
+            for column in range(1, 5):
+                sheet.cell(row, column).fill = STRIPE_FILL
+    for row in (5, 6):
+        for column in range(2, 5):
+            sheet.cell(row, column).number_format = NAV_FORMAT
+    for row in (7, 8):
+        for column in range(2, 5):
+            sheet.cell(row, column).number_format = PERCENT_FORMAT
+    for row in (9, 10):
+        for column in range(2, 5):
+            sheet.cell(row, column).number_format = RATIO_FORMAT
 
-    for row in range(2, sheet.max_row + 1):
-        label = sheet.cell(row, 1).value
-        value = sheet.cell(row, 2)
-        if label in ("Start date", "End date"):
-            value.number_format = "yyyy-mm-dd"
-        elif label in (
-            "Take-profit threshold q",
-            "Strategy total return",
-            "Strategy annualized return",
-            "SPY total return",
-            "SPY annualized return",
-        ):
-            value.number_format = PERCENT_FORMAT
-        elif label in (
+    _write_summary_section(sheet, 12, "Backtest setup")
+    setup_rows = (
+        ("Start date", config.start_date, "End date", config.end_date),
+        (
+            "Return sessions",
+            strategy.session_count,
+            "Rebalance period",
+            f"{config.rebalance_period} sessions",
+        ),
+        (
+            "Take-profit threshold",
+            config.take_profit_threshold,
             "Initial NAV",
-            "Strategy starting NAV",
-            "Strategy ending NAV",
-            "SPY starting NAV",
-            "SPY ending NAV",
-        ):
-            value.number_format = NAV_FORMAT
-        elif label in (
-            "Strategy Sharpe ratio",
-            "Strategy Sortino ratio",
-            "SPY Sharpe ratio",
-            "SPY Sortino ratio",
-        ):
-            value.number_format = RATIO_FORMAT
+            config.initial_nav,
+        ),
+        (
+            "Missing-price policy",
+            config.missing_price_policy,
+            "Annualization",
+            f"{config.annualization_sessions} sessions",
+        ),
+        (
+            "Detailed audit",
+            "technical columns are hidden; unhide them when needed",
+            "Costs / slippage",
+            "not included",
+        ),
+    )
+    for row_number, values in enumerate(setup_rows, start=13):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, value=value)
+        sheet.cell(row_number, 1).font = Font(bold=True)
+        sheet.cell(row_number, 3).font = Font(bold=True)
+    sheet["B13"].number_format = "yyyy-mm-dd"
+    sheet["D13"].number_format = "yyyy-mm-dd"
+    sheet["B15"].number_format = PERCENT_FORMAT
+    sheet["D15"].number_format = NAV_FORMAT
 
-    qc_row = next(
-        row
-        for row in range(2, sheet.max_row + 1)
-        if sheet.cell(row, 1).value == "Overall QC"
+    _write_summary_section(sheet, 19, "Audit and QC")
+    audit_rows = (
+        (
+            "Rebalance events",
+            len(result.rebalance_events),
+            "Trade records",
+            len(result.trades),
+        ),
+        (
+            "Target / action rows",
+            f"{len(result.target_weights)} / {portfolio_action_count}",
+            "Buy lots",
+            len(result.position_lots),
+        ),
+        (
+            "Closed lots",
+            lot_counts["CLOSED"],
+            "Partial / open lots",
+            f"{lot_counts['PARTIALLY_CLOSED']} / {lot_counts['OPEN']}",
+        ),
+        (
+            "Missing rows / sessions",
+            f"{len(result.missing_data_audit)} / {missing_days}",
+            "FIFO reconciliation",
+            result.fifo_reconciliation_status,
+        ),
+        (
+            "Metrics finite",
+            "YES",
+            "Overall QC",
+            overall_qc,
+        ),
     )
-    qc_cell = sheet.cell(qc_row, 2)
-    qc_cell.font = Font(
-        bold=True,
-        color=GREEN if qc_cell.value == "OK" else RED,
-    )
-    qc_cell.fill = OK_FILL if qc_cell.value == "OK" else CHECK_FILL
-    sheet.sheet_view.showGridLines = False
-    sheet.freeze_panes = "A3"
-    sheet.column_dimensions["A"].width = 34
-    sheet.column_dimensions["B"].width = 86
-    for row in range(2, sheet.max_row + 1):
-        sheet.cell(row, 2).alignment = Alignment(
-            vertical="top",
-            wrap_text=True,
+    for row_number, values in enumerate(audit_rows, start=20):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, value=value)
+        sheet.cell(row_number, 1).font = Font(bold=True)
+        sheet.cell(row_number, 3).font = Font(bold=True)
+    for cell_reference, status in (
+        ("D23", result.fifo_reconciliation_status),
+        ("D24", overall_qc),
+    ):
+        cell = sheet[cell_reference]
+        cell.font = Font(
+            bold=True,
+            color=GREEN if status == "OK" else RED,
         )
+        cell.fill = OK_FILL if status == "OK" else CHECK_FILL
 
-
-def _metric_rows(
-    prefix: str,
-    metrics: PerformanceMetrics,
-) -> tuple[tuple[str, object], ...]:
-    return (
-        (f"{prefix} starting NAV", metrics.starting_nav),
-        (f"{prefix} ending NAV", metrics.ending_nav),
-        (f"{prefix} total return", metrics.total_return),
-        (f"{prefix} annualized return", metrics.annualized_return),
-        (f"{prefix} Sharpe ratio", metrics.sharpe_ratio),
-        (f"{prefix} Sortino ratio", metrics.sortino_ratio),
+    _write_summary_section(sheet, 26, "Time semantics and research scope")
+    notes = (
+        (
+            "Time semantics",
+            "as_of_date=T uses inputs through T-1; the old portfolio earns "
+            "the event-date return and the new target starts next session",
+        ),
+        (
+            "Holding convention",
+            "fixed economic units between events; weights drift with Close prices",
+        ),
+        (
+            "Strategy scope",
+            "Yahoo Close price return; p=5%; long-only losers; "
+            "inactive clusters remain cash; cash return and risk-free rate are zero",
+        ),
+        ("Calculation version", result.calculation_version),
+        ("FF12 benchmark", "not produced because ff12_code is currently empty"),
+        (
+            "Paper",
+            "https://ora.ox.ac.uk/objects/uuid%3Ac60358c0-24f0-4c66-b973-f84776f66f8a",
+        ),
+        (
+            "Author code",
+            "https://github.com/maxclchen/Correlation-Matrix-Clustering-for-Statistical-Arbitrage-Portfolios",
+        ),
     )
+    for row_number, (label, value) in enumerate(notes, start=27):
+        sheet.cell(row_number, 1, value=label).font = Font(bold=True)
+        sheet.merge_cells(
+            start_row=row_number,
+            start_column=2,
+            end_row=row_number,
+            end_column=4,
+        )
+        sheet.cell(row_number, 2, value=value)
+        sheet.cell(row_number, 2).alignment = WRAPPED_ALIGNMENT
+
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = "A4"
+    sheet.column_dimensions["A"].width = 25
+    sheet.column_dimensions["B"].width = 31
+    sheet.column_dimensions["C"].width = 24
+    sheet.column_dimensions["D"].width = 31
+    for row in range(3, sheet.max_row + 1):
+        for column in range(1, 5):
+            sheet.cell(row, column).alignment = Alignment(
+                vertical="top",
+                wrap_text=True,
+            )
+
+
+def _write_summary_section(
+    sheet: Worksheet,
+    row: int,
+    label: str,
+) -> None:
+    sheet.merge_cells(
+        start_row=row,
+        start_column=1,
+        end_row=row,
+        end_column=4,
+    )
+    cell = sheet.cell(row, 1, value=label)
+    cell.fill = SECTION_FILL
+    cell.font = Font(bold=True, color=NAVY)
+    cell.border = HEADER_BORDER
+
+
+def _style_summary_header(sheet: Worksheet, reference: str) -> None:
+    for row in sheet[reference]:
+        for cell in row:
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = HEADER_ALIGNMENT
+            cell.border = HEADER_BORDER
+
+
+def _optional_difference(
+    left: float | None,
+    right: float | None,
+) -> float | None:
+    if left is None or right is None:
+        return None
+    return left - right
 
 
 def _write_daily_performance(
@@ -270,68 +372,86 @@ def _write_daily_performance(
             "Trade Date",
             "Strategy Return",
             "NAV",
-            "Round ID",
-            "Round Return",
-            "Holding Day",
-            "Cash Value",
-            "Cash Weight",
-            "Gross Exposure",
-            "Frozen Value",
-            "Frozen Exposure",
-            "Positions",
-            "Missing Positions",
-            "Trigger",
             "SPY Return",
             "SPY NAV",
+            "Round ID",
+            "Holding Day",
+            "Round Return",
+            "Trigger",
+            "Gross Exposure",
+            "Positions",
+            "Missing Positions",
+            "Cash Value",
+            "Cash Weight",
+            "Frozen Value",
+            "Frozen Exposure",
         ),
         rows=(
             (
                 row.trade_date,
                 row.strategy_return,
                 row.nav,
-                row.round_id,
-                row.round_return,
-                row.holding_day,
-                row.cash_value,
-                row.cash_weight,
-                row.gross_exposure,
-                row.frozen_value,
-                row.frozen_exposure,
-                row.position_count,
-                row.missing_position_count,
-                row.trigger_reason,
                 row.spy_return,
                 row.spy_nav,
+                row.round_id,
+                row.holding_day,
+                row.round_return,
+                row.trigger_reason,
+                row.gross_exposure,
+                row.position_count,
+                row.missing_position_count,
+                row.cash_value,
+                row.cash_weight,
+                row.frozen_value,
+                row.frozen_exposure,
             )
             for row in result.daily_performance
         ),
-        widths=(13, 17, 15, 11, 16, 13, 15, 14, 16, 15, 16, 12, 18, 14, 14, 15),
+        widths=(
+            13,
+            17,
+            15,
+            14,
+            15,
+            11,
+            13,
+            16,
+            14,
+            16,
+            12,
+            18,
+            15,
+            14,
+            15,
+            16,
+        ),
         number_formats={
             1: "yyyy-mm-dd",
             2: PERCENT_FORMAT,
             3: NAV_FORMAT,
-            4: "0",
-            5: PERCENT_FORMAT,
+            4: PERCENT_FORMAT,
+            5: NAV_FORMAT,
             6: "0",
-            7: NAV_FORMAT,
+            7: "0",
             8: PERCENT_FORMAT,
-            9: PERCENT_FORMAT,
-            10: NAV_FORMAT,
-            11: PERCENT_FORMAT,
+            10: PERCENT_FORMAT,
+            11: "0",
             12: "0",
-            13: "0",
-            15: PERCENT_FORMAT,
-            16: NAV_FORMAT,
+            13: NAV_FORMAT,
+            14: PERCENT_FORMAT,
+            15: NAV_FORMAT,
+            16: PERCENT_FORMAT,
         },
     )
+    _hide_columns(sheet, ("M", "N", "O", "P"))
     if sheet.max_row >= 2:
         sheet.conditional_formatting.add(
-            f"N2:N{sheet.max_row}",
-            FormulaRule(formula=['N2="stop_win"'], fill=OK_FILL),
+            f"I2:I{sheet.max_row}",
+            FormulaRule(formula=['I2="stop_win"'], fill=OK_FILL),
         )
         sheet.conditional_formatting.add(
-            f"N2:N{sheet.max_row}",
-            FormulaRule(formula=['N2="scheduled"'], fill=SECTION_FILL),
+            f"I2:I{sheet.max_row}",
+            FormulaRule(formula=['I2="scheduled"'], fill=SECTION_FILL),
         )
 
 
@@ -346,14 +466,14 @@ def _write_rebalance_events(
             "Event Date",
             "Reason",
             "Effective Date",
-            "Round ID",
             "Held Sessions",
             "Round Return",
             "NAV",
             "K",
             "Active Clusters",
-            "Inactive Clusters",
             "Target Gross",
+            "Round ID",
+            "Inactive Clusters",
             "Frozen Value",
             "Available Capital",
         ),
@@ -363,39 +483,40 @@ def _write_rebalance_events(
                 event.event_date,
                 event.reason,
                 event.effective_date,
-                event.round_id,
                 event.held_sessions,
                 event.round_return,
                 event.nav,
                 event.cluster_count,
                 event.active_cluster_count,
-                event.inactive_cluster_count,
                 event.target_gross_exposure,
+                event.round_id,
+                event.inactive_cluster_count,
                 event.frozen_value,
                 event.available_capital,
             )
             for event in result.rebalance_events
         ),
-        widths=(11, 14, 14, 15, 11, 15, 16, 15, 9, 17, 18, 16, 15, 18),
+        widths=(11, 14, 14, 15, 15, 16, 15, 9, 17, 16, 11, 18, 15, 18),
         number_formats={
             1: "0",
             2: "yyyy-mm-dd",
             4: "yyyy-mm-dd",
             5: "0",
-            6: "0",
-            7: PERCENT_FORMAT,
-            8: NAV_FORMAT,
+            6: PERCENT_FORMAT,
+            7: NAV_FORMAT,
+            8: "0",
             9: "0",
-            10: "0",
+            10: PERCENT_FORMAT,
             11: "0",
-            12: PERCENT_FORMAT,
+            12: "0",
             13: NAV_FORMAT,
             14: NAV_FORMAT,
         },
     )
+    _hide_columns(sheet, ("K", "L", "M", "N"))
 
 
-def _write_target_weights(
+def _write_portfolio_actions(
     sheet: Worksheet,
     result: BacktestResult,
 ) -> None:
@@ -403,84 +524,300 @@ def _write_target_weights(
         sheet,
         headers=(
             "Event ID",
+            "Event Date",
             "Effective Date",
             "Ticker",
             "Market Cap Rank",
             "Cluster ID",
             "Cumulative Deviation",
+            "Target Portfolio Weight",
+            "Side",
+            "Execution Price",
+            "Units Traded",
+            "Executed Notional",
+            "Status",
+            "Reason",
+            "Trade ID",
+            "Trade Date",
             "Classification",
             "Local Weight",
-            "Portfolio Weight",
+            "Units Before",
+            "Units After",
+            "Requested Notional",
+            "Value Before",
+            "Value After",
         ),
-        rows=(
-            (
-                row.event_id,
-                row.effective_date,
-                row.ticker,
-                row.market_cap_rank,
-                row.cluster_id,
-                row.cumulative_deviation,
-                row.classification,
-                row.local_weight,
-                row.portfolio_weight,
-            )
-            for row in result.target_weights
+        rows=_portfolio_action_rows(result),
+        widths=(
+            11,
+            14,
+            15,
+            14,
+            18,
+            12,
+            23,
+            23,
+            10,
+            14,
+            16,
+            20,
+            23,
+            24,
+            11,
+            14,
+            21,
+            16,
+            16,
+            16,
+            20,
+            16,
+            16,
         ),
-        widths=(11, 15, 14, 18, 12, 23, 21, 16, 18),
         number_formats={
             1: "0",
             2: "yyyy-mm-dd",
-            4: "0",
+            3: "yyyy-mm-dd",
             5: "0",
-            6: PERCENT_FORMAT,
+            6: "0",
+            7: PERCENT_FORMAT,
             8: WEIGHT_FORMAT,
-            9: WEIGHT_FORMAT,
+            10: PRICE_FORMAT,
+            11: UNIT_FORMAT,
+            12: NAV_FORMAT,
+            15: "0",
+            16: "yyyy-mm-dd",
+            18: WEIGHT_FORMAT,
+            19: UNIT_FORMAT,
+            20: UNIT_FORMAT,
+            21: NAV_FORMAT,
+            22: NAV_FORMAT,
+            23: NAV_FORMAT,
         },
     )
+    _hide_columns(sheet, ("O", "P", "Q", "R", "S", "T", "U", "V", "W"))
     if sheet.max_row >= 2:
         sheet.conditional_formatting.add(
-            f"G2:G{sheet.max_row}",
-            FormulaRule(formula=['G2="previous_loser"'], fill=OK_FILL),
+            f"I2:I{sheet.max_row}",
+            FormulaRule(formula=['I2="BUY"'], fill=OK_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"I2:I{sheet.max_row}",
+            FormulaRule(formula=['I2="SELL"'], fill=CHECK_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"M2:M{sheet.max_row}",
+            FormulaRule(
+                formula=['M2="unfilled_missing_close"'],
+                fill=CHECK_FILL,
+            ),
         )
 
 
-def _write_trades(sheet: Worksheet, result: BacktestResult) -> None:
+def _portfolio_action_rows(
+    result: BacktestResult,
+) -> tuple[tuple[object, ...], ...]:
+    events = {event.event_id: event for event in result.rebalance_events}
+    targets = {
+        (target.event_id, target.ticker): target
+        for target in result.target_weights
+    }
+    trades_by_key: dict[tuple[int, str], list[TradeRecord]] = defaultdict(list)
+    standalone_trades: list[TradeRecord] = []
+    for trade in result.trades:
+        if trade.event_id is None:
+            standalone_trades.append(trade)
+        else:
+            trades_by_key[(trade.event_id, trade.ticker)].append(trade)
+
+    rows: list[tuple[object, ...]] = []
+    event_keys = set(targets) | set(trades_by_key)
+    for event_id, ticker in sorted(event_keys):
+        event = events[event_id]
+        target = targets.get((event_id, ticker))
+        matching_trades = trades_by_key.get((event_id, ticker), [])
+        if not matching_trades:
+            rows.append(
+                _portfolio_action_row(event, target, None)
+            )
+            continue
+        rows.extend(
+            _portfolio_action_row(event, target, trade)
+            for trade in matching_trades
+        )
+    rows.extend(
+        _portfolio_action_row(None, None, trade)
+        for trade in standalone_trades
+    )
+    rows.sort(
+        key=lambda row: (
+            row[15] or row[1] or row[2],
+            row[14] or 0,
+            row[3],
+        )
+    )
+    return tuple(rows)
+
+
+def _portfolio_action_row(
+    event: RebalanceEvent | None,
+    target: TargetWeightRecord | None,
+    trade: TradeRecord | None,
+) -> tuple[object, ...]:
+    event_id = (
+        event.event_id
+        if event is not None
+        else trade.event_id if trade is not None else target.event_id
+    )
+    target_weight = target.portfolio_weight if target is not None else None
+    if (
+        target is None
+        and trade is not None
+        and trade.event_id is not None
+        and trade.side == "SELL"
+    ):
+        target_weight = 0.0
+    execution_price = (
+        trade.execution_price if trade is not None else None
+    )
+    return (
+        event_id,
+        event.event_date if event is not None else None,
+        (
+            target.effective_date
+            if target is not None
+            else event.effective_date if event is not None else None
+        ),
+        target.ticker if target is not None else trade.ticker,
+        target.market_cap_rank if target is not None else None,
+        target.cluster_id if target is not None else None,
+        target.cumulative_deviation if target is not None else None,
+        target_weight,
+        trade.side if trade is not None else None,
+        execution_price,
+        trade.units_traded if trade is not None else None,
+        trade.executed_notional if trade is not None else None,
+        trade.status if trade is not None else None,
+        trade.reason if trade is not None else None,
+        trade.trade_id if trade is not None else None,
+        trade.trade_date if trade is not None else None,
+        target.classification if target is not None else None,
+        target.local_weight if target is not None else None,
+        trade.units_before if trade is not None else None,
+        trade.units_after if trade is not None else None,
+        trade.requested_notional if trade is not None else None,
+        trade.value_before if trade is not None else None,
+        trade.value_after if trade is not None else None,
+    )
+
+
+def _write_position_lots(
+    sheet: Worksheet,
+    result: BacktestResult,
+) -> None:
     _write_table(
         sheet,
         headers=(
-            "Event ID",
-            "Trade Date",
+            "Lot ID",
             "Ticker",
-            "Side",
-            "Value Before",
-            "Value After",
-            "Trade Notional",
+            "Buy Date",
+            "Buy Price",
+            "Bought Units",
+            "Buy Notional",
+            "Exit Date",
+            "Exit Price",
+            "Remaining Units",
+            "Realized P&L",
+            "Lot Return",
             "Status",
-            "Reason",
+            "Buy Trade ID",
+            "Buy Event ID",
+            "Sold Units",
+            "First Sell Date",
+            "Matched Sell VWAP",
+            "Sale Proceeds",
+            "Realized Return",
         ),
         rows=(
             (
-                trade.event_id,
-                trade.trade_date,
-                trade.ticker,
-                trade.side,
-                trade.value_before,
-                trade.value_after,
-                trade.trade_notional,
-                trade.status,
-                trade.reason,
+                lot.lot_id,
+                lot.ticker,
+                lot.buy_date,
+                lot.buy_price,
+                lot.bought_units,
+                lot.buy_notional,
+                lot.final_sell_date,
+                lot.final_sell_price,
+                lot.remaining_units,
+                lot.realized_pnl,
+                lot.lot_return,
+                lot.status,
+                lot.buy_trade_id,
+                lot.buy_event_id,
+                lot.sold_units,
+                lot.first_sell_date,
+                lot.matched_sell_vwap,
+                lot.sale_proceeds,
+                lot.realized_return,
             )
-            for trade in result.trades
+            for lot in result.position_lots
         ),
-        widths=(11, 14, 14, 10, 16, 16, 17, 14, 24),
+        widths=(
+            14,
+            14,
+            14,
+            14,
+            16,
+            17,
+            16,
+            16,
+            18,
+            17,
+            16,
+            20,
+            14,
+            14,
+            16,
+            16,
+            19,
+            17,
+            18,
+        ),
         number_formats={
-            1: "0",
-            2: "yyyy-mm-dd",
-            5: NAV_FORMAT,
+            3: "yyyy-mm-dd",
+            4: PRICE_FORMAT,
+            5: UNIT_FORMAT,
             6: NAV_FORMAT,
-            7: NAV_FORMAT,
+            7: "yyyy-mm-dd",
+            8: PRICE_FORMAT,
+            9: UNIT_FORMAT,
+            10: NAV_FORMAT,
+            11: PERCENT_FORMAT,
+            13: "0",
+            14: "0",
+            15: UNIT_FORMAT,
+            16: "yyyy-mm-dd",
+            17: PRICE_FORMAT,
+            18: NAV_FORMAT,
+            19: PERCENT_FORMAT,
         },
     )
+    _hide_columns(sheet, ("M", "N", "O", "P", "Q", "R", "S"))
+    if sheet.max_row >= 2:
+        sheet.conditional_formatting.add(
+            f"L2:L{sheet.max_row}",
+            FormulaRule(formula=['L2="CLOSED"'], fill=OK_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"L2:L{sheet.max_row}",
+            FormulaRule(
+                formula=['L2="PARTIALLY_CLOSED"'],
+                fill=SECTION_FILL,
+            ),
+        )
+        sheet.conditional_formatting.add(
+            f"L2:L{sheet.max_row}",
+            FormulaRule(formula=['L2="OPEN"'], fill=SECTION_FILL),
+        )
 
 
 def _write_missing_data(
@@ -559,6 +896,7 @@ def _overall_qc(result: BacktestResult) -> str:
         "OK"
         if finite
         and reconciled
+        and result.fifo_reconciliation_status == "OK"
         and all(_finite(value) for value in metric_values)
         else "CHECK"
     )
@@ -617,3 +955,13 @@ def _write_table(
     for column, width in enumerate(widths, start=1):
         column_letter = sheet.cell(1, column).column_letter
         sheet.column_dimensions[column_letter].width = width
+
+
+def _hide_columns(
+    sheet: Worksheet,
+    columns: Sequence[str],
+) -> None:
+    for column in columns:
+        dimension = sheet.column_dimensions[column]
+        dimension.hidden = True
+        dimension.outline_level = 1

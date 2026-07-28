@@ -201,6 +201,39 @@ class TradeRecord:
     trade_notional: float
     status: str
     reason: str
+    trade_id: int = 0
+    execution_price: float | None = None
+    units_before: float = 0.0
+    units_traded: float = 0.0
+    units_after: float = 0.0
+    executed_notional: float = 0.0
+
+    @property
+    def requested_notional(self) -> float:
+        return self.trade_notional
+
+
+@dataclass(frozen=True)
+class PositionLotRecord:
+    lot_id: str
+    ticker: str
+    buy_trade_id: int
+    buy_event_id: int | None
+    buy_date: date
+    buy_price: float
+    bought_units: float
+    buy_notional: float
+    sold_units: float
+    remaining_units: float
+    first_sell_date: date | None
+    final_sell_date: date | None
+    matched_sell_vwap: float | None
+    final_sell_price: float | None
+    sale_proceeds: float
+    realized_pnl: float
+    realized_return: float | None
+    lot_return: float | None
+    status: str
 
 
 @dataclass(frozen=True)
@@ -232,8 +265,9 @@ class BacktestResult:
     rebalance_events: tuple[RebalanceEvent, ...]
     target_weights: tuple[TargetWeightRecord, ...]
     trades: tuple[TradeRecord, ...]
+    position_lots: tuple[PositionLotRecord, ...]
+    fifo_reconciliation_status: str
     missing_data_audit: tuple[MissingDataAudit, ...]
     strategy_metrics: PerformanceMetrics
     spy_metrics: PerformanceMetrics
     calculation_version: str
-

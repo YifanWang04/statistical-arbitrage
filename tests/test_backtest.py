@@ -293,10 +293,31 @@ class BacktestCalculationTests(unittest.TestCase):
         self.assertEqual(len(recovery_sales), 1)
         self.assertEqual(recovery_sales[0].ticker, "AAA")
         self.assertAlmostEqual(recovery_sales[0].trade_notional, 0.6)
+        self.assertEqual(recovery_sales[0].execution_price, 120.0)
+        recovery_lot = next(
+            lot for lot in result.position_lots if lot.ticker == "AAA"
+        )
+        self.assertEqual(recovery_lot.status, "CLOSED")
+        self.assertEqual(recovery_lot.final_sell_date, sessions[-1])
+        self.assertEqual(recovery_lot.final_sell_price, 120.0)
+        self.assertAlmostEqual(recovery_lot.lot_return or 0.0, 0.20)
         self.assertIn(
             "recovered_liquidated",
             [audit.action for audit in result.missing_data_audit],
         )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "recovery_backtest.xlsx"
+            export_backtest_workbook(result, output)
+            workbook = load_workbook(output, read_only=False)
+            actions = workbook["Portfolio_Actions"]
+            recovery_row = next(
+                row
+                for row in actions.iter_rows(min_row=2, values_only=True)
+                if row[13] == "recovery_liquidation"
+            )
+            self.assertEqual(recovery_row[3], "AAA")
+            self.assertEqual(recovery_row[8], "SELL")
+            workbook.close()
 
     def test_frozen_position_still_in_target_is_retained_on_recovery(self) -> None:
         previous = date(2026, 1, 2)
@@ -455,6 +476,10 @@ class BacktestCalculationTests(unittest.TestCase):
         self.assertEqual(result.trades[0].side, "BUY")
         self.assertEqual(result.trades[0].status, "unfilled_missing_close")
         self.assertAlmostEqual(result.trades[0].trade_notional, 1.0)
+        self.assertIsNone(result.trades[0].execution_price)
+        self.assertEqual(result.trades[0].units_traded, 0.0)
+        self.assertEqual(result.trades[0].executed_notional, 0.0)
+        self.assertEqual(result.position_lots, ())
         self.assertEqual(
             [audit.action for audit in result.missing_data_audit],
             ["buy_unfilled_cash_retained"],
@@ -528,6 +553,165 @@ class BacktestCalculationTests(unittest.TestCase):
         self.assertEqual(
             result.calculation_version,
             "long_only_close_to_close_stateful_v2",
+        )
+
+    def test_fifo_lots_match_partial_and_cross_lot_sales(self) -> None:
+        previous = date(2026, 1, 2)
+        sessions = tuple(pd.bdate_range("2026-01-05", periods=4).date)
+        closes = pd.DataFrame(
+            {
+                "AAA": [100.0, 100.0, 200.0, 250.0, 250.0],
+                "SPY": [100.0, 100.0, 100.0, 100.0, 100.0],
+            },
+            index=pd.Index((previous, *sessions), name="trade_date"),
+        )
+        targets = {
+            sessions[0]: BacktestTarget(
+                sessions[0],
+                1,
+                1,
+                (TargetWeight("AAA", 0.4),),
+            ),
+            sessions[1]: BacktestTarget(
+                sessions[1],
+                1,
+                1,
+                (TargetWeight("AAA", 0.8),),
+            ),
+            sessions[2]: BacktestTarget(
+                sessions[2],
+                1,
+                1,
+                (TargetWeight("AAA", 0.5),),
+            ),
+            sessions[3]: BacktestTarget(
+                sessions[3],
+                1,
+                0,
+                (TargetWeight("AAA", 0.0),),
+            ),
+        }
+
+        result = simulate_backtest(
+            BacktestMarketData(previous, sessions, closes),
+            BacktestConfig(
+                sessions[0],
+                sessions[-1],
+                rebalance_period=1,
+                take_profit_threshold=10.0,
+            ),
+            targets.__getitem__,
+        )
+
+        self.assertEqual(
+            [trade.trade_id for trade in result.trades],
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(
+            [trade.side for trade in result.trades],
+            ["BUY", "BUY", "SELL", "SELL"],
+        )
+        self.assertTrue(
+            all(
+                abs(
+                    trade.execution_price * trade.units_traded
+                    - trade.executed_notional
+                )
+                < 1e-12
+                for trade in result.trades
+                if trade.execution_price is not None
+            )
+        )
+        for trade in result.trades:
+            expected_units = (
+                trade.units_after - trade.units_before
+                if trade.side == "BUY"
+                else trade.units_before - trade.units_after
+            )
+            self.assertAlmostEqual(trade.units_traded, expected_units)
+        first, second = result.position_lots
+        self.assertEqual(first.lot_id, "LOT000001")
+        self.assertEqual(first.buy_trade_id, 1)
+        self.assertEqual(first.first_sell_date, sessions[1])
+        self.assertEqual(first.final_sell_date, sessions[2])
+        self.assertEqual(first.final_sell_price, 250.0)
+        self.assertAlmostEqual(first.matched_sell_vwap or 0.0, 206.25)
+        self.assertAlmostEqual(first.sale_proceeds, 0.825)
+        self.assertAlmostEqual(first.realized_pnl, 0.425)
+        self.assertAlmostEqual(first.realized_return or 0.0, 1.0625)
+        self.assertAlmostEqual(first.lot_return or 0.0, 1.0625)
+        self.assertEqual(first.status, "CLOSED")
+        self.assertEqual(second.buy_trade_id, 2)
+        self.assertEqual(second.first_sell_date, sessions[2])
+        self.assertEqual(second.final_sell_date, sessions[2])
+        self.assertEqual(second.final_sell_price, 250.0)
+        self.assertAlmostEqual(second.lot_return or 0.0, 1.5)
+        self.assertEqual(second.status, "CLOSED")
+        self.assertEqual(result.fifo_reconciliation_status, "OK")
+
+    def test_fifo_lots_leave_partial_and_open_rows_unclosed_at_end(self) -> None:
+        previous = date(2026, 1, 2)
+        sessions = tuple(pd.bdate_range("2026-01-05", periods=3).date)
+        closes = pd.DataFrame(
+            {
+                "AAA": [100.0, 100.0, 200.0, 200.0],
+                "SPY": [100.0, 100.0, 100.0, 100.0],
+            },
+            index=pd.Index((previous, *sessions), name="trade_date"),
+        )
+        targets = {
+            sessions[0]: BacktestTarget(
+                sessions[0],
+                1,
+                1,
+                (TargetWeight("AAA", 0.4),),
+            ),
+            sessions[1]: BacktestTarget(
+                sessions[1],
+                1,
+                1,
+                (TargetWeight("AAA", 0.8),),
+            ),
+            sessions[2]: BacktestTarget(
+                sessions[2],
+                1,
+                1,
+                (TargetWeight("AAA", 0.5),),
+            ),
+        }
+
+        result = simulate_backtest(
+            BacktestMarketData(previous, sessions, closes),
+            BacktestConfig(
+                sessions[0],
+                sessions[-1],
+                rebalance_period=1,
+                take_profit_threshold=10.0,
+            ),
+            targets.__getitem__,
+        )
+
+        first, second = result.position_lots
+        self.assertEqual(first.status, "PARTIALLY_CLOSED")
+        self.assertEqual(first.first_sell_date, sessions[1])
+        self.assertIsNone(first.final_sell_date)
+        self.assertIsNone(first.final_sell_price)
+        self.assertAlmostEqual(first.realized_return or 0.0, 1.0)
+        self.assertIsNone(first.lot_return)
+        self.assertEqual(second.status, "OPEN")
+        self.assertEqual(second.sold_units, 0.0)
+        self.assertIsNone(second.realized_return)
+        self.assertIsNone(second.lot_return)
+        net_trade_units = sum(
+            trade.units_traded
+            if trade.side == "BUY"
+            else -trade.units_traded
+            for trade in result.trades
+            if trade.status == "executed"
+        )
+        self.assertAlmostEqual(
+            sum(lot.remaining_units for lot in result.position_lots),
+            net_trade_units,
         )
 
 
@@ -671,34 +855,43 @@ class BacktestIntegrationTests(unittest.TestCase):
                     "Summary",
                     "Daily_Performance",
                     "Rebalance_Events",
-                    "Target_Weights",
-                    "Trades",
+                    "Portfolio_Actions",
+                    "Position_Lots",
                     "Missing_Data_Audit",
                 ],
             )
             summary = workbook["Summary"]
-            summary_rows = {
-                summary.cell(row, 1).value: row
-                for row in range(2, summary.max_row + 1)
-            }
             self.assertAlmostEqual(
-                summary.cell(
-                    summary_rows["Strategy total return"],
-                    2,
-                ).value,
+                summary["B7"].value,
                 result.strategy_metrics.total_return,
             )
             self.assertEqual(workbook["Daily_Performance"].max_row, 2)
             self.assertEqual(workbook["Rebalance_Events"]["C2"].value, "initial")
-            target_sheet = workbook["Target_Weights"]
-            self.assertEqual(target_sheet.max_row, 2)
-            self.assertEqual(target_sheet["C2"].value, "AAA")
-            self.assertGreater(target_sheet["I2"].value, 0.0)
-            self.assertEqual(workbook["Trades"]["D2"].value, "BUY")
+            action_sheet = workbook["Portfolio_Actions"]
+            self.assertEqual(action_sheet.max_row, 2)
+            self.assertEqual(action_sheet["D2"].value, "AAA")
+            self.assertGreater(action_sheet["H2"].value, 0.0)
+            self.assertEqual(action_sheet["I2"].value, "BUY")
+            self.assertEqual(action_sheet["J2"].value, 100.0)
+            self.assertAlmostEqual(action_sheet["K2"].value, 0.01)
+            self.assertAlmostEqual(action_sheet["L2"].value, 1.0)
+            lot_sheet = workbook["Position_Lots"]
+            self.assertEqual(lot_sheet.max_row, 2)
+            self.assertEqual(lot_sheet["A2"].value, "LOT000001")
+            self.assertEqual(lot_sheet["D2"].value, 100.0)
+            self.assertEqual(lot_sheet["L2"].value, "OPEN")
             self.assertEqual(workbook["Missing_Data_Audit"].max_row, 1)
             self.assertEqual(
-                summary.cell(summary_rows["Target-weight rows"], 2).value,
+                summary["B21"].value,
+                "1 / 1",
+            )
+            self.assertEqual(
+                summary["D21"].value,
                 1,
+            )
+            self.assertEqual(
+                summary["D23"].value,
+                "OK",
             )
             self.assertEqual(
                 workbook["Daily_Performance"].freeze_panes,
@@ -716,28 +909,46 @@ class BacktestIntegrationTests(unittest.TestCase):
                 workbook["Daily_Performance"]["B2"].number_format,
                 "0.0000%",
             )
-            self.assertEqual(target_sheet["B2"].number_format, "yyyy-mm-dd")
-            self.assertEqual(target_sheet["I2"].number_format, "0.000000")
-            self.assertEqual(target_sheet.column_dimensions["A"].width, 11.0)
-            self.assertEqual(target_sheet["A1"].fill.fill_type, "solid")
+            self.assertEqual(action_sheet["C2"].number_format, "yyyy-mm-dd")
+            self.assertEqual(action_sheet["L2"].number_format, "0.000000")
+            self.assertEqual(action_sheet.column_dimensions["A"].width, 11.0)
+            self.assertEqual(action_sheet["A1"].fill.fill_type, "solid")
             self.assertTrue(
-                str(target_sheet["A1"].fill.fgColor.rgb).endswith("1F4E78")
+                str(action_sheet["A1"].fill.fgColor.rgb).endswith("1F4E78")
             )
-            self.assertEqual(target_sheet["A2"].fill.fill_type, "solid")
+            self.assertEqual(action_sheet["A2"].fill.fill_type, "solid")
             self.assertTrue(
-                str(target_sheet["A2"].fill.fgColor.rgb).endswith("F8FAFC")
+                str(action_sheet["A2"].fill.fgColor.rgb).endswith("F8FAFC")
             )
-            target_conditional_ranges = list(
-                target_sheet.conditional_formatting
+            action_conditional_ranges = list(
+                action_sheet.conditional_formatting
             )
-            self.assertEqual(len(target_conditional_ranges), 1)
-            target_rules = target_sheet.conditional_formatting[
-                target_conditional_ranges[0]
+            self.assertEqual(len(action_conditional_ranges), 2)
+            side_rules = action_sheet.conditional_formatting[
+                action_conditional_ranges[0]
             ]
-            self.assertEqual(len(target_rules), 1)
+            self.assertEqual(len(side_rules), 2)
             self.assertEqual(
-                target_rules[0].formula,
-                ['G2="previous_loser"'],
+                side_rules[0].formula,
+                ['I2="BUY"'],
+            )
+            self.assertTrue(
+                all(
+                    action_sheet.column_dimensions[column].hidden
+                    for column in "OPQRSTUVW"
+                )
+            )
+            self.assertTrue(
+                all(
+                    workbook["Daily_Performance"]
+                    .column_dimensions[column]
+                    .hidden
+                    for column in "MNOP"
+                )
+            )
+            self.assertEqual(
+                workbook["Missing_Data_Audit"].sheet_state,
+                "hidden",
             )
             workbook.close()
 
@@ -777,6 +988,80 @@ class BacktestIntegrationTests(unittest.TestCase):
 
             self.assertFalse(output.exists())
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_excel_actions_keep_target_only_and_sell_only_rows(self) -> None:
+        previous = date(2026, 1, 2)
+        sessions = tuple(pd.bdate_range("2026-01-05", periods=3).date)
+        closes = pd.DataFrame(
+            {
+                "AAA": [100.0, 100.0, 100.0, 100.0],
+                "BBB": [100.0, 100.0, 100.0, 100.0],
+                "SPY": [100.0, 100.0, 100.0, 100.0],
+            },
+            index=pd.Index((previous, *sessions), name="trade_date"),
+        )
+        targets = {
+            sessions[0]: BacktestTarget(
+                sessions[0],
+                1,
+                1,
+                (TargetWeight("AAA", 1.0),),
+            ),
+            sessions[1]: BacktestTarget(
+                sessions[1],
+                1,
+                1,
+                (TargetWeight("AAA", 1.0),),
+            ),
+            sessions[2]: BacktestTarget(
+                sessions[2],
+                1,
+                1,
+                (TargetWeight("BBB", 1.0),),
+            ),
+        }
+        result = simulate_backtest(
+            BacktestMarketData(previous, sessions, closes),
+            BacktestConfig(
+                sessions[0],
+                sessions[-1],
+                rebalance_period=1,
+                take_profit_threshold=10.0,
+            ),
+            targets.__getitem__,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "backtest.xlsx"
+            export_backtest_workbook(result, output)
+            workbook = load_workbook(output, data_only=False, read_only=False)
+            actions = workbook["Portfolio_Actions"]
+            rows = [
+                tuple(
+                    actions.cell(row, column).value
+                    for column in range(1, actions.max_column + 1)
+                )
+                for row in range(2, actions.max_row + 1)
+            ]
+            target_only = next(
+                row
+                for row in rows
+                if row[0] == 2 and row[3] == "AAA"
+            )
+            self.assertEqual(target_only[7], 1.0)
+            self.assertIsNone(target_only[14])
+            self.assertIsNone(target_only[8])
+            sell_only = next(
+                row
+                for row in rows
+                if row[0] == 3
+                and row[3] == "AAA"
+                and row[8] == "SELL"
+            )
+            self.assertEqual(sell_only[7], 0.0)
+            self.assertEqual(sell_only[9], 100.0)
+            self.assertEqual(sell_only[11], 1.0)
+            workbook.close()
 
     def test_cli_requires_explicit_range_and_uses_project_defaults(self) -> None:
         parser = build_parser()

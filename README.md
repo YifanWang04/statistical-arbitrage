@@ -290,11 +290,15 @@ Excel 工作表：
 - `Summary`
 - `Daily_Performance`
 - `Rebalance_Events`
-- `Target_Weights`
-- `Trades`
+- `Portfolio_Actions`
+- `Position_Lots`
 - `Missing_Data_Audit`
 
-`Target_Weights` 只保存 `portfolio_weight > 0` 的实际做多股票，避免为每次换仓重复输出 previous winners、neutral 和其他零权重股票。单决策日的 stock-selection 与 portfolio-weight 报告仍保留完整横截面，便于核对分类和零权重规则。
+Excel 默认采用精简视图：`Summary` 把策略与 SPY 指标并排展示；日度、再平衡、组合动作和 lot 表先显示常用字段，现金拆分、冻结价值、FIFO 中间字段等技术列保留在各表右侧并默认隐藏，需要深度审计时可在 Excel 中取消隐藏。`Missing_Data_Audit` 没有异常记录时整张表默认隐藏，有记录时自动显示。该调整只改变报告展示，不改变回测计算或持仓时间语义。
+
+`Portfolio_Actions` 以事件和股票为粒度合并正权重目标与实际交易。精简视图直接显示目标权重、买卖方向、成交价、成交份额和成交金额；目标内但无需成交的股票保留目标行，退出目标的卖出显示零目标权重，恢复报价后的延迟卖出作为无再平衡事件的独立交易行。请求金额、成交前后份额等详细字段仍保留在隐藏技术列中。
+
+`Position_Lots` 为每次实际买入建立独立 lot，并按 FIFO 将后续部分或全部卖出匹配到最早的未平仓 lot。精简视图显示买入、最终退出、剩余份额、已实现盈亏和 lot 收益；匹配卖出 VWAP、首次卖出日、卖出收入和已实现收益率保留在隐藏技术列中。完全清仓 lot 的 `Lot Return` 使用全部卖出收入除以买入金额；未完全清仓时不强制在回测结束日卖出，最终卖价和 `Lot Return` 留空。单决策日的 stock-selection 与 portfolio-weight 报告仍保留完整横截面，便于核对分类和零权重规则。
 
 策略与 SPY 使用相同日期，风险利率和现金收益均为零。报告给出复利年化收益、年化 Sharpe 和按负收益样本标准差计算的 Sortino。回测结果只在内存中计算并导出 Excel，不写入 DuckDB。
 
@@ -351,7 +355,7 @@ Excel 工作表：
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-28，共 86 项测试，全部通过。测试覆盖：
+截至 2026-07-28，共 89 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -364,7 +368,8 @@ Excel 工作表：
 - 固定份额漂移、`l=3`、`q=5%`、事件日收益归属和计数重置；
 - 缺价冻结、部分换仓、目标内恢复持有、目标外恢复清算、SPY 对齐和绩效公式；
 - 回测全链路只读 DuckDB 边界；
-- Excel 结构和禁止静默覆盖。
+- FIFO 买入 lot、部分卖出、跨 lot 卖出、最终卖价和已实现收益；
+- Excel 精简视图、隐藏技术审计列、合并动作表、持仓周期表和禁止静默覆盖。
 
 ## 代码结构
 
