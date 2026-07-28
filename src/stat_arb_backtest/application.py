@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -45,6 +46,10 @@ def run_backtest(
     market_data = BacktestMarketDataRepository(
         preprocessing_config.database_path
     ).load(backtest_config)
+    effective_backtest_config = replace(
+        backtest_config,
+        start_date=market_data.sessions[0],
+    )
 
     def provide_target(as_of_date: date) -> BacktestTarget:
         result = assign_weights_for_date(
@@ -59,7 +64,7 @@ def run_backtest(
 
     return simulate_backtest(
         market_data,
-        backtest_config,
+        effective_backtest_config,
         provide_target,
         show_progress=show_progress,
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import date
 from pathlib import Path
 
@@ -32,15 +33,17 @@ class BacktestMarketDataRepository:
                     """
                 ).fetchall()
             )
-            if config.start_date not in calendar:
-                raise ValueError(
-                    f"start_date is not an SPY trading session: {config.start_date}"
-                )
             if config.end_date not in calendar:
                 raise ValueError(
                     f"end_date is not an SPY trading session: {config.end_date}"
                 )
-            start_index = calendar.index(config.start_date)
+            start_index = bisect_left(calendar, config.start_date)
+            if start_index == len(calendar):
+                raise ValueError(
+                    "start_date has no SPY trading session on or after it: "
+                    f"{config.start_date}"
+                )
+            effective_start_date = calendar[start_index]
             end_index = calendar.index(config.end_date)
             if end_index < start_index:
                 raise ValueError("end_date must not precede start_date")
@@ -65,7 +68,7 @@ class BacktestMarketDataRepository:
                 ORDER BY prices.trade_date, prices.ticker
                 """,
                 [
-                    config.start_date,
+                    effective_start_date,
                     config.end_date,
                     previous_session,
                     config.end_date,
@@ -110,4 +113,3 @@ class BacktestMarketDataRepository:
             sessions=tuple(sessions),
             closes=close_matrix,
         )
-

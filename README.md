@@ -271,7 +271,7 @@ Excel 工作表：
   --output outputs\step7_backtest\backtest_2026-07-13_2026-07-17.xlsx
 ```
 
-`start-date` 和 `end-date` 均为纳入回测的 SPY 收益日期，必须显式提供且必须是 SPY 交易日。初始目标使用 `as_of_date=start_date`，所以信号只使用起始日前的数据。
+`start-date` 和 `end-date` 必须显式提供。`start-date` 是允许开始回测的最早自然日；若它不是 SPY 交易日，程序顺延到下一个 SPY 交易日，并将该日记录为结果和 Excel 中的实际开始日。`end-date` 仍必须是 SPY 交易日。初始目标使用 `as_of_date=实际开始日`，所以信号只使用实际开始日前的数据。
 
 CLI 与 `scripts/export_backtest.py` 默认显示 `tqdm` 交易日进度、运行速度和预计剩余时间。CLI 自动化运行时可传入 `--no-progress` 关闭；Python API 的 `show_progress` 默认为 `False`。
 
@@ -351,7 +351,7 @@ Excel 工作表：
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-27，共 85 项测试，全部通过。测试覆盖：
+截至 2026-07-28，共 86 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；

@@ -45,7 +45,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a backtest and export the six-sheet audit workbook",
     )
     export.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
-    export.add_argument("--start-date", type=_date, required=True)
+    export.add_argument(
+        "--start-date",
+        type=_date,
+        required=True,
+        help=(
+            "Earliest permitted start date; rolls forward to the next SPY "
+            "trading session"
+        ),
+    )
     export.add_argument("--end-date", type=_date, required=True)
     export.add_argument(
         "--rebalance-period",
@@ -140,8 +148,14 @@ def main(argv: list[str] | None = None) -> int:
             show_progress=not args.no_progress,
         )
         print(f"Backtest workbook: {exported}")
+        effective_start = result.config.start_date
+        start_description = (
+            f"{args.start_date} (effective {effective_start})"
+            if effective_start != args.start_date
+            else str(effective_start)
+        )
         print(
-            f"Range: {args.start_date} to {args.end_date}; "
+            f"Range: {start_description} to {result.config.end_date}; "
             f"sessions={result.strategy_metrics.session_count}; "
             f"events={len(result.rebalance_events)}"
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 import tempfile
 import unittest
@@ -532,6 +532,50 @@ class BacktestCalculationTests(unittest.TestCase):
 
 
 class BacktestIntegrationTests(unittest.TestCase):
+    def test_run_backtest_rolls_non_trading_start_to_next_spy_session(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database, dates = build_test_database(Path(directory))
+            add_close_prices(database)
+            preprocessing_config = PreprocessingConfig(
+                database_path=database,
+                beta_window=40,
+                correlation_window=5,
+            )
+            build_preprocessing(preprocessing_config)
+            calendar = tuple(value.date() for value in dates)
+            effective_start_index = next(
+                index
+                for index in range(60, len(calendar) - 3)
+                if calendar[index].weekday() == 0
+            )
+            effective_start = calendar[effective_start_index]
+            requested_start = effective_start - timedelta(days=1)
+            end = calendar[effective_start_index + 3]
+
+            result = run_backtest(
+                preprocessing_config,
+                BacktestConfig(
+                    start_date=requested_start,
+                    end_date=end,
+                    take_profit_threshold=1.0,
+                ),
+            )
+
+            expected_sessions = calendar[
+                effective_start_index : effective_start_index + 4
+            ]
+            self.assertEqual(result.config.start_date, effective_start)
+            self.assertEqual(
+                tuple(row.trade_date for row in result.daily_performance),
+                expected_sessions,
+            )
+            self.assertEqual(
+                result.rebalance_events[0].effective_date,
+                effective_start,
+            )
+
     def test_run_backtest_uses_existing_pipeline_without_result_tables(
         self,
     ) -> None:
