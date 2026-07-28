@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 import os
 import tempfile
@@ -40,9 +40,9 @@ HEADER_ALIGNMENT = Alignment(
 )
 WRAPPED_ALIGNMENT = Alignment(vertical="top", wrap_text=True)
 
-PERCENT_FORMAT = "0.0000%"
-NAV_FORMAT = "0.000000"
-RATIO_FORMAT = "0.0000"
+PERCENT_FORMAT = "0.00%"
+NAV_FORMAT = "0.0000"
+RATIO_FORMAT = "0.00"
 COUNT_FORMAT = "0"
 DATE_FORMAT = "yyyy-mm-dd"
 
@@ -53,273 +53,454 @@ def _metric(attribute: str) -> Callable[[GridRunResult], object]:
     )
 
 
-RESULT_COLUMNS: tuple[
-    tuple[str, Callable[[GridRunResult], object], str | None, int],
-    ...,
-] = (
-    ("Rank", lambda run: run.rank, COUNT_FORMAT, 9),
-    ("Run ID", lambda run: run.spec.run_id, None, 11),
-    ("Status", lambda run: run.status, None, 12),
-    ("Error Type", lambda run: run.error_type, None, 18),
-    ("Error Message", lambda run: run.error_message, None, 42),
-    ("w", lambda run: run.spec.lookback_window, COUNT_FORMAT, 8),
-    ("p", lambda run: run.spec.deviation_threshold, PERCENT_FORMAT, 11),
-    ("P", lambda run: run.spec.variance_threshold, PERCENT_FORMAT, 11),
-    ("l", lambda run: run.spec.rebalance_period, COUNT_FORMAT, 8),
-    ("q", lambda run: run.spec.take_profit_threshold, PERCENT_FORMAT, 11),
-    ("Sessions", _metric("session_count"), COUNT_FORMAT, 12),
-    ("Starting NAV", _metric("starting_nav"), NAV_FORMAT, 15),
-    ("Ending NAV", _metric("ending_nav"), NAV_FORMAT, 15),
-    ("Total Return", _metric("total_return"), PERCENT_FORMAT, 16),
-    (
+@dataclass(frozen=True)
+class ResultColumn:
+    header: str
+    accessor: Callable[[GridRunResult], object]
+    number_format: str | None
+    width: int
+    visible: bool = True
+
+
+CORE_RESULT_COLUMNS = (
+    ResultColumn("Rank", lambda run: run.rank, COUNT_FORMAT, 8),
+    ResultColumn("Run ID", lambda run: run.spec.run_id, None, 11),
+    ResultColumn("Status", lambda run: run.status, None, 12),
+    ResultColumn("w", lambda run: run.spec.lookback_window, COUNT_FORMAT, 7),
+    ResultColumn(
+        "p",
+        lambda run: run.spec.deviation_threshold,
+        PERCENT_FORMAT,
+        9,
+    ),
+    ResultColumn(
+        "P",
+        lambda run: run.spec.variance_threshold,
+        PERCENT_FORMAT,
+        9,
+    ),
+    ResultColumn("l", lambda run: run.spec.rebalance_period, COUNT_FORMAT, 7),
+    ResultColumn(
+        "q",
+        lambda run: run.spec.take_profit_threshold,
+        PERCENT_FORMAT,
+        9,
+    ),
+    ResultColumn(
         "Annualized Return",
         _metric("annualized_return"),
         PERCENT_FORMAT,
+        17,
+    ),
+    ResultColumn(
+        "Annualized Volatility",
+        _metric("annualized_volatility"),
+        PERCENT_FORMAT,
+        19,
+    ),
+    ResultColumn("Sharpe", _metric("sharpe_ratio"), RATIO_FORMAT, 11),
+    ResultColumn("Sortino", _metric("sortino_ratio"), RATIO_FORMAT, 11),
+    ResultColumn(
+        "Maximum Drawdown",
+        _metric("maximum_drawdown"),
+        PERCENT_FORMAT,
         18,
     ),
-    (
+    ResultColumn("Calmar", _metric("calmar_ratio"), RATIO_FORMAT, 11),
+    ResultColumn("Win Rate", _metric("win_rate"), PERCENT_FORMAT, 12),
+    ResultColumn(
+        "SPY Annualized Return",
+        _metric("spy_annualized_return"),
+        PERCENT_FORMAT,
+        20,
+    ),
+    ResultColumn(
+        "Excess Annualized Return",
+        _metric("excess_annualized_return"),
+        PERCENT_FORMAT,
+        22,
+    ),
+    ResultColumn(
+        "Information Ratio",
+        _metric("information_ratio"),
+        RATIO_FORMAT,
+        17,
+    ),
+    ResultColumn(
+        "Average Gross Exposure",
+        _metric("average_gross_exposure"),
+        PERCENT_FORMAT,
+        21,
+    ),
+    ResultColumn(
+        "Average Cash Weight",
+        _metric("average_cash_weight"),
+        PERCENT_FORMAT,
+        19,
+    ),
+    ResultColumn(
+        "Annualized Two-way Turnover",
+        _metric("annualized_two_way_turnover"),
+        PERCENT_FORMAT,
+        25,
+    ),
+    ResultColumn("Run QC", _metric("overall_qc"), None, 11),
+)
+
+AUDIT_RESULT_COLUMNS = (
+    ResultColumn(
+        "Error Type",
+        lambda run: run.error_type,
+        None,
+        18,
+        visible=False,
+    ),
+    ResultColumn(
+        "Error Message",
+        lambda run: run.error_message,
+        None,
+        42,
+        visible=False,
+    ),
+    ResultColumn(
+        "Sessions",
+        _metric("session_count"),
+        COUNT_FORMAT,
+        12,
+        visible=False,
+    ),
+    ResultColumn(
+        "Starting NAV",
+        _metric("starting_nav"),
+        NAV_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
+        "Ending NAV",
+        _metric("ending_nav"),
+        NAV_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
+        "Total Return",
+        _metric("total_return"),
+        PERCENT_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
         "Mean Daily Return",
         _metric("mean_daily_return"),
         PERCENT_FORMAT,
         18,
+        visible=False,
     ),
-    (
-        "Annualized Volatility",
-        _metric("annualized_volatility"),
-        PERCENT_FORMAT,
-        21,
-    ),
-    ("Sharpe", _metric("sharpe_ratio"), RATIO_FORMAT, 12),
-    (
+    ResultColumn(
         "Annualized Downside Volatility",
         _metric("annualized_downside_volatility"),
         PERCENT_FORMAT,
         28,
+        visible=False,
     ),
-    ("Sortino", _metric("sortino_ratio"), RATIO_FORMAT, 12),
-    (
-        "Maximum Drawdown",
-        _metric("maximum_drawdown"),
-        PERCENT_FORMAT,
-        20,
+    ResultColumn(
+        "DD Peak Date",
+        _metric("drawdown_peak_date"),
+        DATE_FORMAT,
+        15,
+        visible=False,
     ),
-    ("DD Peak Date", _metric("drawdown_peak_date"), DATE_FORMAT, 15),
-    ("DD Trough Date", _metric("drawdown_trough_date"), DATE_FORMAT, 16),
-    ("DD Recovery Date", _metric("drawdown_recovery_date"), DATE_FORMAT, 18),
-    ("Calmar", _metric("calmar_ratio"), RATIO_FORMAT, 12),
-    (
+    ResultColumn(
+        "DD Trough Date",
+        _metric("drawdown_trough_date"),
+        DATE_FORMAT,
+        16,
+        visible=False,
+    ),
+    ResultColumn(
+        "DD Recovery Date",
+        _metric("drawdown_recovery_date"),
+        DATE_FORMAT,
+        18,
+        visible=False,
+    ),
+    ResultColumn(
         "Positive Sessions",
         _metric("positive_session_count"),
         COUNT_FORMAT,
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Negative Sessions",
         _metric("negative_session_count"),
         COUNT_FORMAT,
         18,
+        visible=False,
     ),
-    ("Zero Sessions", _metric("zero_session_count"), COUNT_FORMAT, 15),
-    ("Win Rate", _metric("win_rate"), PERCENT_FORMAT, 13),
-    (
+    ResultColumn(
+        "Zero Sessions",
+        _metric("zero_session_count"),
+        COUNT_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
         "Average Positive Return",
         _metric("average_positive_return"),
         PERCENT_FORMAT,
         23,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Average Negative Return",
         _metric("average_negative_return"),
         PERCENT_FORMAT,
         23,
+        visible=False,
     ),
-    ("Payoff Ratio", _metric("payoff_ratio"), RATIO_FORMAT, 15),
-    ("Profit Factor", _metric("profit_factor"), RATIO_FORMAT, 15),
-    (
+    ResultColumn(
+        "Payoff Ratio",
+        _metric("payoff_ratio"),
+        RATIO_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
+        "Profit Factor",
+        _metric("profit_factor"),
+        RATIO_FORMAT,
+        15,
+        visible=False,
+    ),
+    ResultColumn(
         "Best Daily Return",
         _metric("best_daily_return"),
         PERCENT_FORMAT,
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Worst Daily Return",
         _metric("worst_daily_return"),
         PERCENT_FORMAT,
         19,
+        visible=False,
     ),
-    ("Skewness", _metric("skewness"), RATIO_FORMAT, 13),
-    (
+    ResultColumn(
+        "Skewness",
+        _metric("skewness"),
+        RATIO_FORMAT,
+        13,
+        visible=False,
+    ),
+    ResultColumn(
         "Excess Kurtosis",
         _metric("excess_kurtosis"),
         RATIO_FORMAT,
         17,
+        visible=False,
     ),
-    ("Daily VaR 95%", _metric("daily_var_95"), PERCENT_FORMAT, 16),
-    ("Daily CVaR 95%", _metric("daily_cvar_95"), PERCENT_FORMAT, 17),
-    (
+    ResultColumn(
+        "Daily VaR 95%",
+        _metric("daily_var_95"),
+        PERCENT_FORMAT,
+        16,
+        visible=False,
+    ),
+    ResultColumn(
+        "Daily CVaR 95%",
+        _metric("daily_cvar_95"),
+        PERCENT_FORMAT,
+        17,
+        visible=False,
+    ),
+    ResultColumn(
         "SPY Total Return",
         _metric("spy_total_return"),
         PERCENT_FORMAT,
         18,
+        visible=False,
     ),
-    (
-        "SPY Annualized Return",
-        _metric("spy_annualized_return"),
-        PERCENT_FORMAT,
-        22,
-    ),
-    (
+    ResultColumn(
         "SPY Annualized Volatility",
         _metric("spy_annualized_volatility"),
         PERCENT_FORMAT,
         24,
+        visible=False,
     ),
-    ("SPY Sharpe", _metric("spy_sharpe_ratio"), RATIO_FORMAT, 14),
-    ("SPY Sortino", _metric("spy_sortino_ratio"), RATIO_FORMAT, 14),
-    (
+    ResultColumn(
+        "SPY Sharpe",
+        _metric("spy_sharpe_ratio"),
+        RATIO_FORMAT,
+        14,
+        visible=False,
+    ),
+    ResultColumn(
+        "SPY Sortino",
+        _metric("spy_sortino_ratio"),
+        RATIO_FORMAT,
+        14,
+        visible=False,
+    ),
+    ResultColumn(
         "SPY Maximum Drawdown",
         _metric("spy_maximum_drawdown"),
         PERCENT_FORMAT,
         23,
+        visible=False,
     ),
-    ("SPY Calmar", _metric("spy_calmar_ratio"), RATIO_FORMAT, 14),
-    (
+    ResultColumn(
+        "SPY Calmar",
+        _metric("spy_calmar_ratio"),
+        RATIO_FORMAT,
+        14,
+        visible=False,
+    ),
+    ResultColumn(
         "Excess Total Return",
         _metric("excess_total_return"),
         PERCENT_FORMAT,
         20,
+        visible=False,
     ),
-    (
-        "Excess Annualized Return",
-        _metric("excess_annualized_return"),
-        PERCENT_FORMAT,
-        24,
+    ResultColumn(
+        "SPY Correlation",
+        _metric("spy_correlation"),
+        RATIO_FORMAT,
+        17,
+        visible=False,
     ),
-    ("SPY Correlation", _metric("spy_correlation"), RATIO_FORMAT, 17),
-    ("SPY Beta", _metric("spy_beta"), RATIO_FORMAT, 12),
-    (
+    ResultColumn(
+        "SPY Beta",
+        _metric("spy_beta"),
+        RATIO_FORMAT,
+        12,
+        visible=False,
+    ),
+    ResultColumn(
         "Annualized Alpha",
         _metric("annualized_alpha"),
         PERCENT_FORMAT,
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Tracking Error",
         _metric("tracking_error"),
         PERCENT_FORMAT,
         16,
+        visible=False,
     ),
-    (
-        "Information Ratio",
-        _metric("information_ratio"),
-        RATIO_FORMAT,
-        18,
-    ),
-    (
+    ResultColumn(
         "Initial Events",
         _metric("initial_event_count"),
         COUNT_FORMAT,
         15,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Scheduled Events",
         _metric("scheduled_event_count"),
         COUNT_FORMAT,
         17,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Stop-win Events",
         _metric("stop_win_event_count"),
         COUNT_FORMAT,
         16,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Average Held Sessions",
         _metric("average_held_sessions"),
         "0.00",
         21,
+        visible=False,
     ),
-    ("Average K", _metric("average_cluster_count"), "0.00", 13),
-    (
+    ResultColumn(
+        "Average K",
+        _metric("average_cluster_count"),
+        "0.00",
+        13,
+        visible=False,
+    ),
+    ResultColumn(
         "Average Active Clusters",
         _metric("average_active_cluster_count"),
         "0.00",
         22,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Average Inactive Clusters",
         _metric("average_inactive_cluster_count"),
         "0.00",
         23,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Average Target Gross",
         _metric("average_target_gross_exposure"),
         PERCENT_FORMAT,
         21,
+        visible=False,
     ),
-    (
-        "Average Gross Exposure",
-        _metric("average_gross_exposure"),
-        PERCENT_FORMAT,
-        23,
-    ),
-    (
-        "Average Cash Weight",
-        _metric("average_cash_weight"),
-        PERCENT_FORMAT,
-        20,
-    ),
-    (
+    ResultColumn(
         "Average Frozen Exposure",
         _metric("average_frozen_exposure"),
         PERCENT_FORMAT,
         23,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Average Positions",
         _metric("average_position_count"),
         "0.00",
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Minimum Positions",
         _metric("minimum_position_count"),
         COUNT_FORMAT,
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Maximum Positions",
         _metric("maximum_position_count"),
         COUNT_FORMAT,
         18,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Missing Sessions",
         _metric("missing_session_count"),
         COUNT_FORMAT,
         17,
+        visible=False,
     ),
-    (
+    ResultColumn(
         "Missing Audit Rows",
         _metric("missing_audit_count"),
         COUNT_FORMAT,
         19,
+        visible=False,
     ),
-    (
-        "Annualized Two-way Turnover",
-        _metric("annualized_two_way_turnover"),
-        PERCENT_FORMAT,
-        27,
-    ),
-    (
+    ResultColumn(
         "FIFO Status",
         _metric("fifo_reconciliation_status"),
         None,
         14,
+        visible=False,
     ),
-    ("Run QC", _metric("overall_qc"), None, 12),
 )
+
+RESULT_COLUMNS = CORE_RESULT_COLUMNS + AUDIT_RESULT_COLUMNS
 
 
 def export_grid_backtest_workbook(
@@ -340,18 +521,11 @@ def export_grid_backtest_workbook(
     workbook.remove(workbook.active)
     summary = workbook.create_sheet("Summary")
     results = workbook.create_sheet("Grid_Results")
-    parameters = workbook.create_sheet("Parameter_Grid")
-    definitions = workbook.create_sheet("Metric_Definitions")
-    checks = workbook.create_sheet("Checks")
+    audit = workbook.create_sheet("Audit")
 
     _write_summary(summary, result)
     _write_grid_results(results, result)
-    _write_parameter_grid(
-        parameters,
-        result,
-    )
-    _write_metric_definitions(definitions)
-    _write_checks(checks, result)
+    _write_audit(audit, result)
 
     temporary_path: Path | None = None
     try:
@@ -372,7 +546,7 @@ def export_grid_backtest_workbook(
 
 
 def _write_summary(sheet: Worksheet, result: GridBacktestResult) -> None:
-    sheet.merge_cells("A1:F1")
+    sheet.merge_cells("A1:L1")
     sheet["A1"] = (
         "Step 8 Grid Backtest — "
         f"{result.effective_start_date.isoformat()} to "
@@ -383,23 +557,47 @@ def _write_summary(sheet: Worksheet, result: GridBacktestResult) -> None:
     sheet["A1"].alignment = Alignment(vertical="center")
     sheet.row_dimensions[1].height = 28
 
-    _section(sheet, 3, "Grid overview", 6)
+    _section(sheet, 3, "Run overview", 12)
     overview = (
-        ("Requested start", result.requested_start_date, "Requested end", result.requested_end_date),
-        ("Effective start", result.effective_start_date, "Effective end", result.effective_end_date),
-        ("Combinations", len(result.runs), "Successful", result.successful_run_count),
-        ("Failed", result.failed_run_count, "Ranking", "Sharpe descending"),
-        ("Best run", result.best_run_id, "Overall QC", result.overall_qc),
-        ("Persistence", "Excel only", "DuckDB results", "not persisted"),
+        (
+            "Requested start",
+            result.requested_start_date,
+            "Requested end",
+            result.requested_end_date,
+            "Effective start",
+            result.effective_start_date,
+            "Effective end",
+            result.effective_end_date,
+        ),
+        (
+            "Combinations",
+            len(result.runs),
+            "Successful",
+            result.successful_run_count,
+            "Failed",
+            result.failed_run_count,
+            "Overall QC",
+            result.overall_qc,
+        ),
+        (
+            "Best run",
+            result.best_run_id,
+            "Ranking",
+            "Sharpe descending",
+            "Persistence",
+            "Excel only",
+            "Technical detail",
+            "hidden in Grid_Results",
+        ),
     )
     for row_number, values in enumerate(overview, start=4):
         for column, value in enumerate(values, start=1):
             sheet.cell(row_number, column, value=value)
-        sheet.cell(row_number, 1).font = Font(bold=True)
-        sheet.cell(row_number, 3).font = Font(bold=True)
-    for cell in ("B4", "D4", "B5", "D5"):
+        for column in (1, 3, 5, 7):
+            sheet.cell(row_number, column).font = Font(bold=True)
+    for cell in ("B4", "D4", "F4", "H4"):
         sheet[cell].number_format = DATE_FORMAT
-    status_cell = sheet["D8"]
+    status_cell = sheet["H5"]
     status_cell.font = Font(
         bold=True,
         color=GREEN if result.overall_qc == "OK" else RED,
@@ -409,36 +607,110 @@ def _write_summary(sheet: Worksheet, result: GridBacktestResult) -> None:
     )
 
     best = result.best_run
-    _section(sheet, 11, "Best run", 6)
-    best_rows = (
-        ("Run ID", best.spec.run_id if best else None, "Rank", best.rank if best else None),
-        ("w", best.spec.lookback_window if best else None, "p", best.spec.deviation_threshold if best else None),
-        ("P", best.spec.variance_threshold if best else None, "l", best.spec.rebalance_period if best else None),
-        ("q", best.spec.take_profit_threshold if best else None, "Status", best.status if best else None),
-        ("Annualized return", _best_metric(best, "annualized_return"), "Sharpe", _best_metric(best, "sharpe_ratio")),
-        ("Maximum drawdown", _best_metric(best, "maximum_drawdown"), "Calmar", _best_metric(best, "calmar_ratio")),
-        ("SPY annualized return", _best_metric(best, "spy_annualized_return"), "Information ratio", _best_metric(best, "information_ratio")),
-        ("Annualized turnover", _best_metric(best, "annualized_two_way_turnover"), "Run QC", _best_metric(best, "overall_qc")),
+    _section(sheet, 9, "Best run parameters", 12)
+    _write_table(
+        sheet,
+        start_row=10,
+        headers=("Run ID", "Rank", "w", "p", "P", "l", "q", "Status"),
+        rows=(
+            (
+                best.spec.run_id if best else None,
+                best.rank if best else None,
+                best.spec.lookback_window if best else None,
+                best.spec.deviation_threshold if best else None,
+                best.spec.variance_threshold if best else None,
+                best.spec.rebalance_period if best else None,
+                best.spec.take_profit_threshold if best else None,
+                best.status if best else None,
+            ),
+        ),
+        number_formats={
+            2: COUNT_FORMAT,
+            3: COUNT_FORMAT,
+            4: PERCENT_FORMAT,
+            5: PERCENT_FORMAT,
+            6: COUNT_FORMAT,
+            7: PERCENT_FORMAT,
+        },
+        auto_filter=False,
     )
-    for row_number, values in enumerate(best_rows, start=12):
+    _section(sheet, 13, "Best run performance", 12)
+    _write_table(
+        sheet,
+        start_row=14,
+        headers=("Metric", "Strategy", "SPY", "Difference"),
+        rows=_best_performance_rows(best),
+        number_formats={
+            2: PERCENT_FORMAT,
+            3: PERCENT_FORMAT,
+            4: PERCENT_FORMAT,
+        },
+        auto_filter=False,
+    )
+    for row in (18, 19, 21):
+        for column in (2, 3, 4):
+            sheet.cell(row, column).number_format = RATIO_FORMAT
+
+    _section(sheet, 23, "Best run operations and exposure", 12)
+    operations = (
+        (
+            "Annualized turnover",
+            _best_metric(best, "annualized_two_way_turnover"),
+            "Average held sessions",
+            _best_metric(best, "average_held_sessions"),
+        ),
+        (
+            "Average K",
+            _best_metric(best, "average_cluster_count"),
+            "Average active clusters",
+            _best_metric(best, "average_active_cluster_count"),
+        ),
+        (
+            "Average gross exposure",
+            _best_metric(best, "average_gross_exposure"),
+            "Average cash weight",
+            _best_metric(best, "average_cash_weight"),
+        ),
+        (
+            "Average positions",
+            _best_metric(best, "average_position_count"),
+            "Missing sessions",
+            _best_metric(best, "missing_session_count"),
+        ),
+    )
+    for row_number, values in enumerate(operations, start=24):
         for column, value in enumerate(values, start=1):
             sheet.cell(row_number, column, value=value)
         sheet.cell(row_number, 1).font = Font(bold=True)
         sheet.cell(row_number, 3).font = Font(bold=True)
-    for cell in ("D13", "B14", "B15", "B16", "B17", "B18", "B19"):
+    for cell in ("B24", "B26", "D26"):
         sheet[cell].number_format = PERCENT_FORMAT
-    for cell in ("D16", "D17", "D18"):
-        sheet[cell].number_format = RATIO_FORMAT
+    for cell in ("D24", "B25", "D25", "B27"):
+        sheet[cell].number_format = "0.00"
+    sheet["D27"].number_format = COUNT_FORMAT
 
-    _section(sheet, 22, "Top 10 by Sharpe", 10)
-    top_headers = ("Rank", "Run ID", "w", "p", "P", "l", "q", "Annualized Return", "Sharpe", "Max Drawdown")
+    _section(sheet, 30, "Top 10 by Sharpe", 12)
+    top_headers = (
+        "Rank",
+        "Run ID",
+        "w",
+        "p",
+        "P",
+        "l",
+        "q",
+        "Annualized Return",
+        "Sharpe",
+        "Max Drawdown",
+        "Excess Ann. Return",
+        "Turnover",
+    )
     top_runs = sorted(
         (run for run in result.runs if run.rank is not None),
         key=lambda run: int(run.rank),
     )[:10]
     _write_table(
         sheet,
-        start_row=23,
+        start_row=31,
         headers=top_headers,
         rows=(
             (
@@ -452,6 +724,16 @@ def _write_summary(sheet: Worksheet, result: GridBacktestResult) -> None:
                 run.metrics.annualized_return if run.metrics else None,
                 run.metrics.sharpe_ratio if run.metrics else None,
                 run.metrics.maximum_drawdown if run.metrics else None,
+                (
+                    run.metrics.excess_annualized_return
+                    if run.metrics
+                    else None
+                ),
+                (
+                    run.metrics.annualized_two_way_turnover
+                    if run.metrics
+                    else None
+                ),
             )
             for run in top_runs
         ),
@@ -465,11 +747,13 @@ def _write_summary(sheet: Worksheet, result: GridBacktestResult) -> None:
             8: PERCENT_FORMAT,
             9: RATIO_FORMAT,
             10: PERCENT_FORMAT,
+            11: PERCENT_FORMAT,
+            12: PERCENT_FORMAT,
         },
     )
     sheet.sheet_view.showGridLines = False
     sheet.freeze_panes = "A4"
-    widths = (24, 22, 24, 22, 18, 18, 12, 12, 12, 18)
+    widths = (24, 16, 24, 18, 20, 16, 22, 20, 12, 17, 19, 16)
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 
@@ -478,18 +762,15 @@ def _write_grid_results(
     sheet: Worksheet,
     result: GridBacktestResult,
 ) -> None:
-    headers = tuple(column[0] for column in RESULT_COLUMNS)
+    headers = tuple(column.header for column in RESULT_COLUMNS)
     rows = (
-        tuple(accessor(run) for _, accessor, _, _ in RESULT_COLUMNS)
+        tuple(column.accessor(run) for column in RESULT_COLUMNS)
         for run in result.runs
     )
     formats = {
-        index: number_format
-        for index, (_, _, number_format, _) in enumerate(
-            RESULT_COLUMNS,
-            start=1,
-        )
-        if number_format is not None
+        index: column.number_format
+        for index, column in enumerate(RESULT_COLUMNS, start=1)
+        if column.number_format is not None
     }
     _write_table(
         sheet,
@@ -498,9 +779,15 @@ def _write_grid_results(
         rows=rows,
         number_formats=formats,
     )
-    for index, (_, _, _, width) in enumerate(RESULT_COLUMNS, start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = width
-    sheet.freeze_panes = "K2"
+    hidden_columns: list[str] = []
+    for index, column in enumerate(RESULT_COLUMNS, start=1):
+        column_letter = get_column_letter(index)
+        sheet.column_dimensions[column_letter].width = column.width
+        if not column.visible:
+            hidden_columns.append(column_letter)
+    _hide_columns(sheet, hidden_columns)
+    sheet.freeze_panes = "I2"
+    sheet.sheet_view.showGridLines = False
     last_column = get_column_letter(len(RESULT_COLUMNS))
     sheet.auto_filter.ref = f"A1:{last_column}{sheet.max_row}"
     if sheet.max_row >= 2:
@@ -513,82 +800,22 @@ def _write_grid_results(
             FormulaRule(formula=['C2="FAILED"'], fill=CHECK_FILL),
         )
         sheet.conditional_formatting.add(
-            f"A2:A{sheet.max_row}",
-            FormulaRule(formula=["A2=1"], fill=BEST_FILL),
+            f"A2:V{sheet.max_row}",
+            FormulaRule(formula=["$A2=1"], fill=BEST_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"V2:V{sheet.max_row}",
+            FormulaRule(formula=['V2="OK"'], fill=OK_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"V2:V{sheet.max_row}",
+            FormulaRule(formula=['V2="CHECK"'], fill=CHECK_FILL),
         )
 
 
-def _write_parameter_grid(
-    sheet: Worksheet,
-    result: GridBacktestResult,
-) -> None:
-    _title(sheet, "Step 8 Parameter Grid", 5)
-    _section(sheet, 3, "Search dimensions", 5)
-    dimension_rows = (
-        ("Parameter", "Symbol", "Candidate values", "Count", "Meaning"),
-        ("Lookback window", "w", _joined(result.config.lookback_windows), len(result.config.lookback_windows), "Shared clustering and stock-selection sessions"),
-        ("Deviation threshold", "p", _joined(result.config.deviation_thresholds), len(result.config.deviation_thresholds), "Winner/loser cumulative raw-return deviation threshold"),
-        ("Variance threshold", "P", _joined(result.config.variance_thresholds), len(result.config.variance_thresholds), "Cumulative explained variance used to select K"),
-        ("Rebalance period", "l", _joined(result.config.rebalance_periods), len(result.config.rebalance_periods), "Earned return sessions before scheduled rebalance"),
-        ("Take-profit threshold", "q", _joined(result.config.take_profit_thresholds), len(result.config.take_profit_thresholds), "Compounded round return for early rebalance"),
-    )
-    for row_number, values in enumerate(dimension_rows, start=4):
-        for column, value in enumerate(values, start=1):
-            sheet.cell(row_number, column, value=value)
-    _style_header(sheet, 4, 5)
-
-    _section(sheet, 11, "Fixed settings", 5)
-    fixed_rows = (
-        ("Setting", "Value", "Unit / policy", "Source", "Notes"),
-        ("Requested start", result.requested_start_date, "date", "GridBacktestConfig", "Explicit included return date"),
-        ("Requested end", result.requested_end_date, "date", "GridBacktestConfig", "Explicit included return date"),
-        ("Effective start", result.effective_start_date, "SPY session", "BacktestMarketDataRepository", "Requested start rolls forward"),
-        ("Effective end", result.effective_end_date, "SPY session", "BacktestMarketDataRepository", "Must be an SPY session"),
-        ("Beta window", result.beta_window, "sessions", "PreprocessingConfig", "Includes historical session t"),
-        ("K estimation window", result.cluster_count_estimation_window, "sessions", "Grid fixed setting", "Independent of actual clustering w"),
-        ("Initial NAV", result.config.initial_nav, "NAV units", "GridBacktestConfig", "Scale only"),
-        ("Annualization", result.config.annualization_sessions, "sessions", "GridBacktestConfig", "Risk-free and cash return are zero"),
-        ("tau positive", result.sponge_config.tau_positive, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
-        ("tau negative", result.sponge_config.tau_negative, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
-        ("Random seed", result.sponge_config.random_seed, "integer", "SpongeSymConfig", "Fixed across runs"),
-        ("k-means n_init", result.sponge_config.kmeans_n_init, "runs", "SpongeSymConfig", "Fixed across runs"),
-        ("Combinations", result.config.combination_count, "runs", "Cartesian product", "After sorting and de-duplication"),
-        ("Maximum combinations", result.config.maximum_combinations, "runs", "Safety guard", "Must be explicitly raised when exceeded"),
-    )
-    for row_number, values in enumerate(fixed_rows, start=12):
-        for column, value in enumerate(values, start=1):
-            sheet.cell(row_number, column, value=value)
-    _style_header(sheet, 12, 5)
-    for row in (13, 14, 15, 16):
-        sheet.cell(row, 2).number_format = DATE_FORMAT
-    sheet.sheet_view.showGridLines = False
-    sheet.freeze_panes = "A4"
-    for column, width in enumerate((25, 24, 22, 27, 58), start=1):
-        sheet.column_dimensions[get_column_letter(column)].width = width
-    for row in range(1, sheet.max_row + 1):
-        sheet.cell(row, 5).alignment = WRAPPED_ALIGNMENT
-
-
-def _write_metric_definitions(sheet: Worksheet) -> None:
-    _title(sheet, "Metric Definitions", 5)
-    rows = _metric_definition_rows()
-    _write_table(
-        sheet,
-        start_row=3,
-        headers=("Metric", "Category", "Definition", "Unit", "Undefined rule"),
-        rows=rows,
-    )
-    sheet.freeze_panes = "A4"
-    sheet.sheet_view.showGridLines = False
-    for column, width in enumerate((31, 20, 90, 24, 48), start=1):
-        sheet.column_dimensions[get_column_letter(column)].width = width
-    for row in range(4, sheet.max_row + 1):
-        sheet.cell(row, 3).alignment = WRAPPED_ALIGNMENT
-        sheet.cell(row, 5).alignment = WRAPPED_ALIGNMENT
-
-
-def _write_checks(sheet: Worksheet, result: GridBacktestResult) -> None:
-    _title(sheet, "Grid Backtest Checks", 8)
+def _write_audit(sheet: Worksheet, result: GridBacktestResult) -> None:
+    _title(sheet, "Grid Backtest Audit", 7)
+    _section(sheet, 3, "Quality checks", 7)
     successful_sessions = {
         run.metrics.session_count
         for run in result.runs
@@ -604,54 +831,110 @@ def _write_checks(sheet: Worksheet, result: GridBacktestResult) -> None:
     )
     _write_table(
         sheet,
-        start_row=3,
+        start_row=4,
         headers=("Check", "Actual", "Expected", "Difference", "Tolerance", "Status", "Notes"),
         rows=summary_checks,
+        auto_filter=False,
     )
-    _section(sheet, 11, "Run-level audit", 8)
+
+    _section(sheet, 12, "Search dimensions", 7)
+    dimension_rows = (
+        ("Lookback window", "w", _joined(result.config.lookback_windows), len(result.config.lookback_windows), "Shared clustering and stock-selection sessions"),
+        ("Deviation threshold", "p", _joined(result.config.deviation_thresholds), len(result.config.deviation_thresholds), "Winner/loser cumulative raw-return deviation threshold"),
+        ("Variance threshold", "P", _joined(result.config.variance_thresholds), len(result.config.variance_thresholds), "Cumulative explained variance used to select K"),
+        ("Rebalance period", "l", _joined(result.config.rebalance_periods), len(result.config.rebalance_periods), "Earned return sessions before scheduled rebalance"),
+        ("Take-profit threshold", "q", _joined(result.config.take_profit_thresholds), len(result.config.take_profit_thresholds), "Compounded round return for early rebalance"),
+    )
     _write_table(
         sheet,
-        start_row=12,
+        start_row=13,
+        headers=("Parameter", "Symbol", "Candidate values", "Count", "Meaning"),
+        rows=dimension_rows,
+        number_formats={4: COUNT_FORMAT},
+        auto_filter=False,
+    )
+
+    _section(sheet, 21, "Fixed settings", 7)
+    fixed_rows = (
+        ("Requested start", result.requested_start_date, "date", "GridBacktestConfig", "Explicit included return date"),
+        ("Requested end", result.requested_end_date, "date", "GridBacktestConfig", "Explicit included return date"),
+        ("Effective start", result.effective_start_date, "SPY session", "BacktestMarketDataRepository", "Requested start rolls forward"),
+        ("Effective end", result.effective_end_date, "SPY session", "BacktestMarketDataRepository", "Must be an SPY session"),
+        ("Beta window", result.beta_window, "sessions", "PreprocessingConfig", "Includes historical session t"),
+        ("K estimation window", result.cluster_count_estimation_window, "sessions", "Grid fixed setting", "Independent of actual clustering w"),
+        ("Initial NAV", result.config.initial_nav, "NAV units", "GridBacktestConfig", "Scale only"),
+        ("Annualization", result.config.annualization_sessions, "sessions", "GridBacktestConfig", "Risk-free and cash return are zero"),
+        ("tau positive", result.sponge_config.tau_positive, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
+        ("tau negative", result.sponge_config.tau_negative, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
+        ("Random seed", result.sponge_config.random_seed, "integer", "SpongeSymConfig", "Fixed across runs"),
+        ("k-means n_init", result.sponge_config.kmeans_n_init, "runs", "SpongeSymConfig", "Fixed across runs"),
+        ("Combinations", result.config.combination_count, "runs", "Cartesian product", "After sorting and de-duplication"),
+        ("Maximum combinations", result.config.maximum_combinations, "runs", "Safety guard", "Must be explicitly raised when exceeded"),
+        ("Calculation version", result.calculation_version, "version", "GridBacktestResult", "Defines the grid calculation contract"),
+    )
+    _write_table(
+        sheet,
+        start_row=22,
+        headers=("Setting", "Value", "Unit / policy", "Source", "Notes"),
+        rows=fixed_rows,
+        auto_filter=False,
+    )
+    for row in (23, 24, 25, 26):
+        sheet.cell(row, 2).number_format = DATE_FORMAT
+
+    exception_rows = _exception_rows(result)
+    _section(sheet, 40, "Exceptions only", 7)
+    _write_table(
+        sheet,
+        start_row=41,
         headers=(
             "Run ID",
             "Status",
             "Rank",
-            "Sessions",
-            "FIFO",
             "Run QC",
+            "FIFO",
             "Error Type",
             "Error Message",
         ),
-        rows=(
-            (
-                run.spec.run_id,
-                run.status,
-                run.rank,
-                run.metrics.session_count if run.metrics else None,
-                run.metrics.fifo_reconciliation_status if run.metrics else None,
-                run.metrics.overall_qc if run.metrics else None,
-                run.error_type,
-                run.error_message,
-            )
-            for run in result.runs
-        ),
-        number_formats={3: COUNT_FORMAT, 4: COUNT_FORMAT},
+        rows=exception_rows,
+        number_formats={3: COUNT_FORMAT},
+        auto_filter=False,
     )
-    sheet.freeze_panes = "A13"
+
+    definitions_section_row = 44 + len(exception_rows)
+    _section(sheet, definitions_section_row, "Metric definitions", 7)
+    _write_table(
+        sheet,
+        start_row=definitions_section_row + 1,
+        headers=("Metric", "Category", "Definition", "Unit", "Undefined rule"),
+        rows=_metric_definition_rows(),
+    )
+
+    sheet.freeze_panes = "A5"
     sheet.sheet_view.showGridLines = False
-    for column, width in enumerate((32, 14, 14, 14, 14, 14, 20, 62), start=1):
+    widths = (31, 34, 62, 32, 46, 16, 58)
+    for column, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(column)].width = width
-    for row in range(4, sheet.max_row + 1):
-        sheet.cell(row, 1).alignment = WRAPPED_ALIGNMENT
-        sheet.cell(row, 8).alignment = WRAPPED_ALIGNMENT
-    if sheet.max_row >= 13:
+    for row in range(1, sheet.max_row + 1):
+        for column in (3, 5, 7):
+            sheet.cell(row, column).alignment = WRAPPED_ALIGNMENT
+    if sheet.max_row >= 5:
         sheet.conditional_formatting.add(
-            f"B13:B{sheet.max_row}",
-            FormulaRule(formula=['B13="SUCCESS"'], fill=OK_FILL),
+            "F5:F9",
+            FormulaRule(formula=['F5="OK"'], fill=OK_FILL),
         )
         sheet.conditional_formatting.add(
-            f"B13:B{sheet.max_row}",
-            FormulaRule(formula=['B13="FAILED"'], fill=CHECK_FILL),
+            "F5:F9",
+            FormulaRule(formula=['F5="CHECK"'], fill=CHECK_FILL),
+        )
+    if exception_rows:
+        sheet.conditional_formatting.add(
+            f"B42:B{41 + len(exception_rows)}",
+            FormulaRule(formula=['B42="FAILED"'], fill=CHECK_FILL),
+        )
+        sheet.conditional_formatting.add(
+            f"D42:D{41 + len(exception_rows)}",
+            FormulaRule(formula=['D42="CHECK"'], fill=CHECK_FILL),
         )
 
 
@@ -662,6 +945,7 @@ def _write_table(
     headers: Sequence[str],
     rows: Iterable[Sequence[object]],
     number_formats: dict[int, str] | None = None,
+    auto_filter: bool = True,
 ) -> None:
     formats = number_formats or {}
     for column, value in enumerate(headers, start=1):
@@ -681,10 +965,11 @@ def _write_table(
             if column in formats:
                 cell.number_format = formats[column]
     sheet.row_dimensions[start_row].height = 34
-    last_column = sheet.cell(start_row, len(headers)).column_letter
-    sheet.auto_filter.ref = (
-        f"A{start_row}:{last_column}{max(sheet.max_row, start_row)}"
-    )
+    if auto_filter:
+        last_column = sheet.cell(start_row, len(headers)).column_letter
+        sheet.auto_filter.ref = (
+            f"A{start_row}:{last_column}{max(sheet.max_row, start_row)}"
+        )
 
 
 def _title(sheet: Worksheet, value: str, columns: int) -> None:
@@ -719,13 +1004,95 @@ def _section(
     cell.border = HEADER_BORDER
 
 
-def _style_header(sheet: Worksheet, row: int, columns: int) -> None:
-    for column in range(1, columns + 1):
-        cell = sheet.cell(row, column)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = HEADER_ALIGNMENT
-        cell.border = HEADER_BORDER
+def _hide_columns(
+    sheet: Worksheet,
+    columns: Sequence[str],
+) -> None:
+    if not columns:
+        return
+    sheet.column_dimensions.group(
+        columns[0],
+        columns[-1],
+        hidden=True,
+        outline_level=1,
+    )
+
+
+def _best_performance_rows(
+    run: GridRunResult | None,
+) -> tuple[tuple[str, object, object, object], ...]:
+    pairs = (
+        ("Total return", "total_return", "spy_total_return"),
+        (
+            "Annualized return",
+            "annualized_return",
+            "spy_annualized_return",
+        ),
+        (
+            "Annualized volatility",
+            "annualized_volatility",
+            "spy_annualized_volatility",
+        ),
+        ("Sharpe", "sharpe_ratio", "spy_sharpe_ratio"),
+        ("Sortino", "sortino_ratio", "spy_sortino_ratio"),
+        (
+            "Maximum drawdown",
+            "maximum_drawdown",
+            "spy_maximum_drawdown",
+        ),
+        ("Calmar", "calmar_ratio", "spy_calmar_ratio"),
+    )
+    rows: list[tuple[str, object, object, object]] = []
+    for label, strategy_attribute, spy_attribute in pairs:
+        strategy_value = _best_metric(run, strategy_attribute)
+        spy_value = _best_metric(run, spy_attribute)
+        difference = (
+            None
+            if strategy_value is None or spy_value is None
+            else float(strategy_value) - float(spy_value)
+        )
+        rows.append((label, strategy_value, spy_value, difference))
+    return tuple(rows)
+
+
+def _exception_rows(
+    result: GridBacktestResult,
+) -> tuple[tuple[object, ...], ...]:
+    rows = tuple(
+        (
+            run.spec.run_id,
+            run.status,
+            run.rank,
+            run.metrics.overall_qc if run.metrics else None,
+            (
+                run.metrics.fifo_reconciliation_status
+                if run.metrics
+                else None
+            ),
+            run.error_type,
+            run.error_message,
+        )
+        for run in result.runs
+        if (
+            run.status != "SUCCESS"
+            or run.metrics is None
+            or run.metrics.overall_qc != "OK"
+            or run.metrics.fifo_reconciliation_status != "OK"
+        )
+    )
+    if rows:
+        return rows
+    return (
+        (
+            "None",
+            "—",
+            None,
+            "OK",
+            "OK",
+            None,
+            "All runs passed status, run QC, and FIFO checks.",
+        ),
+    )
 
 
 def _best_metric(

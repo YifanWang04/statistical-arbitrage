@@ -505,7 +505,7 @@ class GridCacheAndIntegrationTests(unittest.TestCase):
 
 
 class GridExcelTests(unittest.TestCase):
-    def test_excel_has_five_audit_sheets_and_refuses_overwrite(
+    def test_excel_has_compact_views_hidden_audit_columns_and_refuses_overwrite(
         self,
     ) -> None:
         metrics = calculate_grid_run_metrics(_sample_backtest_result())
@@ -558,22 +558,29 @@ class GridExcelTests(unittest.TestCase):
                 [
                     "Summary",
                     "Grid_Results",
-                    "Parameter_Grid",
-                    "Metric_Definitions",
-                    "Checks",
+                    "Audit",
                 ],
             )
-            self.assertEqual(workbook["Grid_Results"].max_row, 3)
-            self.assertEqual(workbook["Grid_Results"]["B2"].value, "G0001")
-            self.assertEqual(workbook["Grid_Results"]["A2"].value, 1)
-            self.assertEqual(workbook["Grid_Results"]["C3"].value, "FAILED")
-            self.assertEqual(workbook["Summary"]["B8"].value, "G0001")
-            self.assertEqual(workbook["Summary"]["D8"].value, "CHECK")
-            self.assertEqual(workbook["Grid_Results"].freeze_panes, "K2")
-            self.assertGreater(
-                workbook["Metric_Definitions"].max_row,
-                50,
+            grid_results = workbook["Grid_Results"]
+            self.assertEqual(grid_results.max_row, 3)
+            self.assertEqual(grid_results["B2"].value, "G0001")
+            self.assertEqual(grid_results["A2"].value, 1)
+            self.assertEqual(grid_results["C3"].value, "FAILED")
+            self.assertEqual(grid_results["V1"].value, "Run QC")
+            self.assertEqual(grid_results.freeze_panes, "I2")
+            self.assertFalse(grid_results.column_dimensions["V"].hidden)
+            self.assertTrue(grid_results.column_dimensions["W"].hidden)
+            self.assertEqual(workbook["Summary"]["B6"].value, "G0001")
+            self.assertEqual(workbook["Summary"]["H5"].value, "CHECK")
+            audit_values = tuple(
+                cell.value
+                for row in workbook["Audit"].iter_rows()
+                for cell in row
+                if cell.value is not None
             )
+            self.assertIn("sample failure", audit_values)
+            self.assertIn("Metric definitions", audit_values)
+            self.assertGreater(workbook["Audit"].max_row, 90)
             workbook.close()
             with self.assertRaises(FileExistsError):
                 export_grid_backtest_workbook(

@@ -1,6 +1,7 @@
 """Step-8 parameter-grid backtesting over the authoritative step-7 engine."""
 
 from .application import (
+    DEFAULT_MAX_WORKERS,
     build_grid_run_specs,
     export_grid_backtest_report,
     resolve_grid_date_range,
@@ -26,6 +27,7 @@ from .models import (
 __all__ = [
     "DEFAULT_DEVIATION_THRESHOLDS",
     "DEFAULT_LOOKBACK_WINDOWS",
+    "DEFAULT_MAX_WORKERS",
     "DEFAULT_MAXIMUM_COMBINATIONS",
     "DEFAULT_REBALANCE_PERIODS",
     "DEFAULT_TAKE_PROFIT_THRESHOLDS",

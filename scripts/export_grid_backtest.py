@@ -6,6 +6,7 @@ from pathlib import Path
 from stat_arb_cluster_count import DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW
 from stat_arb_clustering import SpongeSymConfig
 from stat_arb_grid_backtest import (
+    DEFAULT_MAX_WORKERS,
     GridBacktestConfig,
     export_grid_backtest_report,
     resolve_grid_date_range,
@@ -17,9 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
 
 # The start and end dates are included SPY return dates.
-START_DATE = date(2025, 1, 1)
+START_DATE = date(2024, 1, 1)
 END_DATE = date(2026, 7, 27)
-
 LOOKBACK_WINDOWS = (5, 10, 20)
 DEVIATION_THRESHOLDS = (0.1, 0.05) ## deviation > p  → winner; deviation < -p → loser
 VARIANCE_THRESHOLDS = (0.90,) ## 元组，即使一个元素，也需要保留逗号
@@ -36,6 +36,7 @@ RANDOM_SEED = 0
 KMEANS_N_INIT = 10
 REPLACE_EXISTING = True
 SHOW_PROGRESS = True
+MAX_WORKERS = DEFAULT_MAX_WORKERS # 5
 
 
 def main() -> None:
@@ -80,6 +81,7 @@ def main() -> None:
         ),
         replace_existing=REPLACE_EXISTING,
         show_progress=SHOW_PROGRESS,
+        max_workers=MAX_WORKERS,
     )
     print(f"Grid backtest workbook exported: {output}")
     print(

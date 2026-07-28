@@ -31,9 +31,16 @@ def get_snapshot(
     as_of_date: date,
     *,
     cache: bool = True,
+    read_only: bool = False,
 ) -> PreprocessingSnapshot:
-    with PreprocessingRepository(config.database_path) as repository:
-        repository.initialise()
+    if read_only and cache:
+        raise ValueError("read_only snapshots cannot be persisted to the cache")
+    with PreprocessingRepository(
+        config.database_path,
+        read_only=read_only,
+    ) as repository:
+        if not read_only:
+            repository.initialise()
         current_run = repository.current_completed_run(config)
         if cache:
             cached = repository.load_snapshot(as_of_date, config, current_run)

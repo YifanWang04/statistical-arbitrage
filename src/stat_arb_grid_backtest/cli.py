@@ -11,6 +11,7 @@ from stat_arb_preprocessing import PreprocessingConfig
 from stat_arb_preprocessing.config import DEFAULT_DATABASE
 
 from .application import (
+    DEFAULT_MAX_WORKERS,
     export_grid_backtest_report,
     resolve_grid_date_range,
 )
@@ -99,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--output", type=Path, default=None)
     export.add_argument("--replace", action="store_true")
     export.add_argument("--no-progress", action="store_true")
+    export.add_argument(
+        "--max-workers",
+        type=int,
+        default=DEFAULT_MAX_WORKERS,
+        help="Maximum concurrent grid runs (default: 5)",
+    )
     return parser
 
 
@@ -146,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             replace_existing=args.replace,
             show_progress=not args.no_progress,
+            max_workers=args.max_workers,
         )
         print(f"Grid backtest workbook: {exported}")
         print(

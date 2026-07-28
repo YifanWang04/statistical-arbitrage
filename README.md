@@ -329,8 +329,11 @@ q = [0.03, 0.05]
   --variance-thresholds 0.85 0.90 `
   --rebalance-periods 3 5 10 `
   --take-profit-thresholds 0.03 0.05 `
+  --max-workers 5 `
   --output outputs\step8_grid_backtest\grid_backtest_2023-07-27_2026-07-27.xlsx
 ```
+
+CLI 与 `scripts/export_grid_backtest.py` 默认最多同时运行 5 个 grid run；IDE 脚本可通过 `MAX_WORKERS` 调整，CLI 可通过 `--max-workers` 调整。动态 K、快照、聚类和目标缓存按 `w` 与决策日安全复用，同一键只计算一次；NumPy/SciPy 的底层线程限制为每个 run 1 条，避免 5 个 run 再各自开启多条 BLAS 线程。并行结果仍按稳定 `run_id` 汇总，不改变信号时间语义、持仓状态机或排名规则。机器内存不足时可把 worker 数降到 2–3。
 
 结果先按 Sharpe、再按年化收益、最大回撤绝对值和稳定 `run_id` 排名。每组输出收益、波动率、Sharpe、Sortino、Calmar、最大回撤、收益分布、95% VaR/CVaR、SPY 相对指标、再平衡、暴露、缺价和换手率。零波动或分母无效的比率留空。
 
@@ -338,9 +341,9 @@ Excel 工作表：
 
 - `Summary`
 - `Grid_Results`
-- `Parameter_Grid`
-- `Metric_Definitions`
-- `Checks`
+- `Audit`
+
+Excel 默认采用结论优先的精简视图：`Summary` 集中展示运行概览、最佳参数、策略与 SPY 对比、最佳组合的持仓特征及 Sharpe 前十；`Grid_Results` 先显示参数和核心绩效指标，完整分布、基准、事件、暴露、缺价及 FIFO 字段保留在右侧并默认隐藏；`Audit` 合并参数网格、固定设置、质量检查、异常组合和指标定义，正常组合不再重复写入逐行审计表。需要深度核对时，可在 Excel 中展开 `Grid_Results` 的隐藏列。
 
 第八步复用第七步的持仓状态机，并在内存中复用动态 K 特征谱、相关矩阵快照、聚类和不同 `p` 的目标。它不导出每组日度或交易明细，不把最佳参数回写为项目默认值，也不在 DuckDB 中创建网格结果表。
 
@@ -397,7 +400,7 @@ Excel 工作表：
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-28，共 101 项测试，全部通过。测试覆盖：
+截至 2026-07-28，共 105 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -412,7 +415,7 @@ Excel 工作表：
 - 回测全链路只读 DuckDB 边界；
 - FIFO 买入 lot、部分卖出、跨 lot 卖出、最终卖价和已实现收益；
 - Excel 精简视图、隐藏技术审计列、合并动作表、持仓周期表和禁止静默覆盖。
-- 五参数网格组合、显式统一样本、缓存复用、完整指标、Sharpe 排名及五表 Excel 报告。
+- 五参数网格组合、显式统一样本、5-run 并行与 single-flight 缓存复用、完整指标、Sharpe 排名及三表精简 Excel 报告。
 
 ## 代码结构
 

@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import date
 from itertools import product
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 
 import duckdb
 from threadpoolctl import threadpool_limits
@@ -43,6 +43,8 @@ from .models import (
     GridRunSpec,
 )
 
+DEFAULT_MAX_WORKERS = 5
+
 
 class _ClusterCountCache:
     def __init__(
@@ -59,30 +61,11 @@ class _ClusterCountCache:
         self._values: dict[date, dict[float, ClusterCountResult]] = {}
         self._errors: dict[date, Exception] = {}
         self._lock = RLock()
+        self._date_locks: dict[date, Lock] = {}
 
     def get(self, as_of_date: date) -> dict[float, ClusterCountResult]:
-        with self._lock:
-            if as_of_date in self._errors:
-                raise self._errors[as_of_date]
-            if as_of_date not in self._values:
-                try:
-                    snapshot = get_snapshot(
-                        self.estimation_config,
-                        as_of_date,
-                        cache=False,
-                    )
-                    results = calculate_cluster_counts(
-                        snapshot,
-                        self.variance_thresholds,
-                    )
-                    self._values[as_of_date] = {
-                        result.variance_threshold: result
-                        for result in results
-                    }
-                except Exception as exc:
-                    self._errors[as_of_date] = exc
-                    raise
-            return self._values[as_of_date]
+        values, _ = self._get_or_build(as_of_date, include_snapshot=False)
+        return values
 
     def get_with_snapshot(
         self,
@@ -91,36 +74,64 @@ class _ClusterCountCache:
         dict[float, ClusterCountResult],
         PreprocessingSnapshot,
     ]:
-        with self._lock:
-            if as_of_date in self._errors:
-                raise self._errors[as_of_date]
-            cached = self._values.get(as_of_date)
-            if cached is None:
+        values, snapshot = self._get_or_build(
+            as_of_date,
+            include_snapshot=True,
+        )
+        if snapshot is None:
+            raise RuntimeError("cluster-count snapshot was not returned")
+        return values, snapshot
+
+    def _get_or_build(
+        self,
+        as_of_date: date,
+        *,
+        include_snapshot: bool,
+    ) -> tuple[
+        dict[float, ClusterCountResult],
+        PreprocessingSnapshot | None,
+    ]:
+        date_lock = self._date_lock(as_of_date)
+        with date_lock:
+            with self._lock:
+                if as_of_date in self._errors:
+                    raise self._errors[as_of_date]
+                cached = self._values.get(as_of_date)
+
+            snapshot: PreprocessingSnapshot | None = None
+            if cached is None or include_snapshot:
                 try:
                     snapshot = get_snapshot(
                         self.estimation_config,
                         as_of_date,
                         cache=False,
+                        read_only=True,
                     )
-                    results = calculate_cluster_counts(
-                        snapshot,
-                        self.variance_thresholds,
-                    )
-                    cached = {
-                        result.variance_threshold: result
-                        for result in results
-                    }
-                    self._values[as_of_date] = cached
+                    if cached is None:
+                        results = calculate_cluster_counts(
+                            snapshot,
+                            self.variance_thresholds,
+                        )
+                        cached = {
+                            result.variance_threshold: result
+                            for result in results
+                        }
                 except Exception as exc:
-                    self._errors[as_of_date] = exc
+                    if cached is None:
+                        with self._lock:
+                            self._errors[as_of_date] = exc
                     raise
-                return cached, snapshot
-        snapshot = get_snapshot(
-            self.estimation_config,
-            as_of_date,
-            cache=False,
-        )
-        return cached, snapshot
+
+            if cached is None:
+                raise RuntimeError("cluster-count cache did not produce a value")
+
+            with self._lock:
+                self._values.setdefault(as_of_date, cached)
+                return self._values[as_of_date], snapshot
+
+    def _date_lock(self, as_of_date: date) -> Lock:
+        with self._lock:
+            return self._date_locks.setdefault(as_of_date, Lock())
 
 
 class _TargetCache:
@@ -148,6 +159,8 @@ class _TargetCache:
             BacktestTarget,
         ] = {}
         self._errors: dict[tuple[date, float, float], Exception] = {}
+        self._lock = RLock()
+        self._date_locks: dict[date, Lock] = {}
 
     def get(
         self,
@@ -157,86 +170,102 @@ class _TargetCache:
     ) -> BacktestTarget:
         self._ensure_date(as_of_date)
         key = (as_of_date, variance_threshold, deviation_threshold)
-        if key in self._errors:
-            raise self._errors[key]
-        return self._targets[key]
+        with self._lock:
+            if key in self._errors:
+                raise self._errors[key]
+            return self._targets[key]
 
     def _ensure_date(self, as_of_date: date) -> None:
-        if as_of_date in self._built_dates:
-            return
-        try:
-            if (
-                self.lookback_window
-                == self.cluster_counts.estimation_config.correlation_window
-            ):
-                cluster_counts, snapshot = (
-                    self.cluster_counts.get_with_snapshot(as_of_date)
-                )
-            else:
-                cluster_counts = self.cluster_counts.get(as_of_date)
-                snapshot = get_snapshot(
-                    self.preprocessing_config,
-                    as_of_date,
-                    cache=False,
-                )
-        except Exception as exc:
-            self._store_error_for_all(as_of_date, exc)
-            self._built_dates.add(as_of_date)
-            return
+        with self._lock:
+            if as_of_date in self._built_dates:
+                return
+            date_lock = self._date_locks.setdefault(as_of_date, Lock())
 
-        for variance_threshold in self.variance_thresholds:
+        with date_lock:
+            with self._lock:
+                if as_of_date in self._built_dates:
+                    return
+
+            targets: dict[tuple[date, float, float], BacktestTarget] = {}
+            errors: dict[tuple[date, float, float], Exception] = {}
             try:
-                clustering = cluster_stocks_from_snapshot(
-                    snapshot,
-                    cluster_counts[variance_threshold],
-                    sponge_config=self.sponge_config,
-                )
+                if (
+                    self.lookback_window
+                    == self.cluster_counts.estimation_config.correlation_window
+                ):
+                    cluster_counts, snapshot = (
+                        self.cluster_counts.get_with_snapshot(as_of_date)
+                    )
+                else:
+                    cluster_counts = self.cluster_counts.get(as_of_date)
+                    snapshot = get_snapshot(
+                        self.preprocessing_config,
+                        as_of_date,
+                        cache=False,
+                        read_only=True,
+                    )
             except Exception as exc:
-                for deviation_threshold in self.deviation_thresholds:
-                    self._errors[
-                        (
+                errors.update(self._errors_for_all(as_of_date, exc))
+            else:
+                for variance_threshold in self.variance_thresholds:
+                    try:
+                        clustering = cluster_stocks_from_snapshot(
+                            snapshot,
+                            cluster_counts[variance_threshold],
+                            sponge_config=self.sponge_config,
+                        )
+                    except Exception as exc:
+                        for deviation_threshold in self.deviation_thresholds:
+                            errors[
+                                (
+                                    as_of_date,
+                                    variance_threshold,
+                                    deviation_threshold,
+                                )
+                            ] = exc
+                        continue
+
+                    for deviation_threshold in self.deviation_thresholds:
+                        key = (
                             as_of_date,
                             variance_threshold,
                             deviation_threshold,
                         )
-                    ] = exc
-                continue
+                        try:
+                            selection = identify_stocks_to_trade(
+                                clustering,
+                                snapshot.stock_return_matrix,
+                                StockSelectionConfig(
+                                    lookback_window=self.lookback_window,
+                                    deviation_threshold=deviation_threshold,
+                                ),
+                            )
+                            weights = assign_portfolio_weights(selection)
+                            targets[key] = target_from_portfolio_weights(weights)
+                        except Exception as exc:
+                            errors[key] = exc
 
-            for deviation_threshold in self.deviation_thresholds:
-                key = (
-                    as_of_date,
-                    variance_threshold,
-                    deviation_threshold,
-                )
-                try:
-                    selection = identify_stocks_to_trade(
-                        clustering,
-                        snapshot.stock_return_matrix,
-                        StockSelectionConfig(
-                            lookback_window=self.lookback_window,
-                            deviation_threshold=deviation_threshold,
-                        ),
-                    )
-                    weights = assign_portfolio_weights(selection)
-                    self._targets[key] = target_from_portfolio_weights(weights)
-                except Exception as exc:
-                    self._errors[key] = exc
-        self._built_dates.add(as_of_date)
+            with self._lock:
+                self._targets.update(targets)
+                self._errors.update(errors)
+                self._built_dates.add(as_of_date)
 
-    def _store_error_for_all(
+    def _errors_for_all(
         self,
         as_of_date: date,
         error: Exception,
-    ) -> None:
+    ) -> dict[tuple[date, float, float], Exception]:
+        errors: dict[tuple[date, float, float], Exception] = {}
         for variance_threshold in self.variance_thresholds:
             for deviation_threshold in self.deviation_thresholds:
-                self._errors[
+                errors[
                     (
                         as_of_date,
                         variance_threshold,
                         deviation_threshold,
                     )
                 ] = error
+        return errors
 
 
 def build_grid_run_specs(
@@ -289,7 +318,9 @@ def run_grid_backtest(
     ),
     sponge_config: SpongeSymConfig | None = None,
     show_progress: bool = False,
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> GridBacktestResult:
+    _validate_max_workers(max_workers)
     with threadpool_limits(limits=1):
         return _run_grid_backtest(
             preprocessing_config,
@@ -299,6 +330,7 @@ def run_grid_backtest(
             ),
             sponge_config=sponge_config,
             show_progress=show_progress,
+            max_workers=max_workers,
         )
 
 
@@ -309,6 +341,7 @@ def _run_grid_backtest(
     cluster_count_estimation_window: int,
     sponge_config: SpongeSymConfig | None,
     show_progress: bool,
+    max_workers: int,
 ) -> GridBacktestResult:
     configured_grid = grid_config
     requested_start, requested_end = resolve_grid_date_range(
@@ -341,14 +374,6 @@ def _run_grid_backtest(
         dynamic_ncols=True,
         disable=not show_progress,
     )
-    specs_by_lookback = {
-        lookback_window: tuple(
-            spec
-            for spec in specs
-            if spec.lookback_window == lookback_window
-        )
-        for lookback_window in configured_grid.lookback_windows
-    }
     execution_order = sorted(
         configured_grid.lookback_windows,
         key=lambda lookback_window: (
@@ -356,12 +381,8 @@ def _run_grid_backtest(
             lookback_window,
         ),
     )
-
-    def run_lookback(
-        lookback_window: int,
-    ) -> tuple[GridRunResult, ...]:
-        lookback_runs: list[GridRunResult] = []
-        targets = _TargetCache(
+    targets_by_lookback = {
+        lookback_window: _TargetCache(
             preprocessing_config,
             lookback_window,
             configured_grid.deviation_thresholds,
@@ -369,60 +390,63 @@ def _run_grid_backtest(
             cluster_counts,
             configured_sponge,
         )
-        for spec in specs_by_lookback[lookback_window]:
-            try:
-                backtest_config = BacktestConfig(
-                    start_date=effective_start,
-                    end_date=effective_end,
-                    rebalance_period=spec.rebalance_period,
-                    take_profit_threshold=spec.take_profit_threshold,
-                    initial_nav=configured_grid.initial_nav,
-                    annualization_sessions=(
-                        configured_grid.annualization_sessions
-                    ),
-                )
-                result = simulate_backtest(
-                    market_data,
-                    backtest_config,
-                    lambda as_of_date, current=spec: targets.get(
-                        as_of_date,
-                        current.variance_threshold,
-                        current.deviation_threshold,
-                    ),
-                    show_progress=False,
-                )
-                run = GridRunResult(
-                    spec=spec,
-                    status="SUCCESS",
-                    metrics=calculate_grid_run_metrics(result),
-                )
-            except Exception as exc:
-                run = GridRunResult(
-                    spec=spec,
-                    status="FAILED",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                )
-            lookback_runs.append(run)
-            progress.update(1)
-        return tuple(lookback_runs)
+        for lookback_window in configured_grid.lookback_windows
+    }
 
-    maximum_workers = min(3, len(execution_order))
+    def run_spec(spec: GridRunSpec) -> GridRunResult:
+        targets = targets_by_lookback[spec.lookback_window]
+        try:
+            backtest_config = BacktestConfig(
+                start_date=effective_start,
+                end_date=effective_end,
+                rebalance_period=spec.rebalance_period,
+                take_profit_threshold=spec.take_profit_threshold,
+                initial_nav=configured_grid.initial_nav,
+                annualization_sessions=(
+                    configured_grid.annualization_sessions
+                ),
+            )
+            result = simulate_backtest(
+                market_data,
+                backtest_config,
+                lambda as_of_date: targets.get(
+                    as_of_date,
+                    spec.variance_threshold,
+                    spec.deviation_threshold,
+                ),
+                show_progress=False,
+            )
+            return GridRunResult(
+                spec=spec,
+                status="SUCCESS",
+                metrics=calculate_grid_run_metrics(result),
+            )
+        except Exception as exc:
+            return GridRunResult(
+                spec=spec,
+                status="FAILED",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+
+    execution_specs = _interleave_specs_by_lookback(
+        specs,
+        execution_order,
+    )
+    effective_workers = min(max_workers, len(execution_specs))
     try:
         with ThreadPoolExecutor(
-            max_workers=maximum_workers,
-            thread_name_prefix="grid-lookback",
+            max_workers=effective_workers,
+            thread_name_prefix="grid-run",
         ) as executor:
             futures = {
-                executor.submit(
-                    run_lookback,
-                    lookback_window,
-                ): lookback_window
-                for lookback_window in execution_order
+                executor.submit(run_spec, spec): spec
+                for spec in execution_specs
             }
             for future in as_completed(futures):
-                for run in future.result():
-                    runs_by_id[run.spec.run_id] = run
+                run = future.result()
+                runs_by_id[run.spec.run_id] = run
+                progress.update(1)
     finally:
         progress.close()
     runs = tuple(runs_by_id[spec.run_id] for spec in specs)
@@ -471,6 +495,7 @@ def export_grid_backtest_report(
     sponge_config: SpongeSymConfig | None = None,
     replace_existing: bool = False,
     show_progress: bool = False,
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> tuple[GridBacktestResult, Path]:
     from .excel import export_grid_backtest_workbook
 
@@ -480,6 +505,7 @@ def export_grid_backtest_report(
         cluster_count_estimation_window=cluster_count_estimation_window,
         sponge_config=sponge_config,
         show_progress=show_progress,
+        max_workers=max_workers,
     )
     output = export_grid_backtest_workbook(
         result,
@@ -519,6 +545,33 @@ def _rank_runs(
 
 def _descending_optional(value: float | None) -> float:
     return float(value) if value is not None else float("-inf")
+
+
+def _interleave_specs_by_lookback(
+    specs: tuple[GridRunSpec, ...],
+    lookback_order: list[int],
+) -> tuple[GridRunSpec, ...]:
+    pending = {
+        lookback: [
+            spec for spec in specs if spec.lookback_window == lookback
+        ]
+        for lookback in lookback_order
+    }
+    interleaved: list[GridRunSpec] = []
+    while any(pending.values()):
+        for lookback in lookback_order:
+            if pending[lookback]:
+                interleaved.append(pending[lookback].pop(0))
+    return tuple(interleaved)
+
+
+def _validate_max_workers(max_workers: int) -> None:
+    if (
+        isinstance(max_workers, bool)
+        or not isinstance(max_workers, int)
+        or max_workers < 1
+    ):
+        raise ValueError("max_workers must be a positive integer")
 
 
 def _latest_spy_session(database_path: Path) -> date:
