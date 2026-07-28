@@ -1,5 +1,6 @@
 """IDE entry point: run step 8 and export the grid-ranking workbook."""
 
+from datetime import date
 from pathlib import Path
 
 from stat_arb_cluster_count import DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW
@@ -15,16 +16,13 @@ from stat_arb_preprocessing import PreprocessingConfig
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
 
-# Leave dates as None to use the latest SPY session and the preceding
-# three calendar years. Set either or both to explicit date(...) values
-# when a fixed research sample is required.
-START_DATE = None
-END_DATE = None
-DEFAULT_LOOKBACK_YEARS = 3
+# The start and end dates are included SPY return dates.
+START_DATE = date(2025, 1, 1)
+END_DATE = date(2026, 7, 27)
 
 LOOKBACK_WINDOWS = (5, 10, 20)
-DEVIATION_THRESHOLDS = (0.0, 0.05)
-VARIANCE_THRESHOLDS = (0.85, 0.90)
+DEVIATION_THRESHOLDS = (0.1, 0.05) ## deviation > p  → winner; deviation < -p → loser
+VARIANCE_THRESHOLDS = (0.90,) ## 元组，即使一个元素，也需要保留逗号
 REBALANCE_PERIODS = (3, 5, 10)
 TAKE_PROFIT_THRESHOLDS = (0.03, 0.05)
 
@@ -54,7 +52,6 @@ def main() -> None:
         take_profit_thresholds=TAKE_PROFIT_THRESHOLDS,
         initial_nav=INITIAL_NAV,
         annualization_sessions=ANNUALIZATION_SESSIONS,
-        default_lookback_years=DEFAULT_LOOKBACK_YEARS,
         maximum_combinations=MAXIMUM_COMBINATIONS,
     )
     requested_start, requested_end = resolve_grid_date_range(

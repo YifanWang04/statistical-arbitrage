@@ -158,7 +158,7 @@ def build_snapshot_from_frames(
     maximum_correlation = float(np.max(values))
     eigenvalues = np.linalg.eigvalsh((values + values.T) / 2.0)
     minimum_eigenvalue = float(np.min(eigenvalues))
-    numerical_rank = int(np.linalg.matrix_rank(values, tol=1e-10))
+    numerical_rank = int(np.count_nonzero(np.abs(eigenvalues) > 1e-10))
     if maximum_asymmetry > 1e-12:
         raise ValueError(f"Correlation matrix is not symmetric: {maximum_asymmetry}")
     if minimum_correlation < -1.0 - 1e-12 or maximum_correlation > 1.0 + 1e-12:

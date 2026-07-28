@@ -41,13 +41,17 @@ def identify_stocks_to_trade(
     )
     cluster_means.columns.name = "cluster_id"
 
-    daily_deviations = returns.copy()
-    for column_index, cluster_id in enumerate(labels):
-        daily_deviations.iloc[:, column_index] = (
-            returns.iloc[:, column_index] - cluster_means.loc[:, cluster_id]
-        )
+    daily_deviation_values = (
+        returns.to_numpy(dtype=float, copy=True)
+        - cluster_means.to_numpy(dtype=float, copy=False)[:, labels]
+    )
+    daily_deviations = pd.DataFrame(
+        daily_deviation_values,
+        index=returns.index,
+        columns=returns.columns,
+    )
 
-    cumulative = daily_deviations.sum(axis=0).to_numpy(dtype=float)
+    cumulative = daily_deviation_values.sum(axis=0)
     threshold = selection_config.deviation_threshold
     classifications = tuple(
         PREVIOUS_WINNER
@@ -59,9 +63,11 @@ def identify_stocks_to_trade(
     )
 
     daily_cluster_errors = [
-        abs(float(daily_deviations.iloc[row_index, labels == cluster_id].sum()))
-        for row_index in range(len(daily_deviations))
+        abs(float(value))
         for cluster_id in cluster_ids
+        for value in daily_deviation_values[:, labels == cluster_id].sum(
+            axis=1
+        )
     ]
     cumulative_cluster_errors = [
         abs(float(cumulative[labels == cluster_id].sum()))

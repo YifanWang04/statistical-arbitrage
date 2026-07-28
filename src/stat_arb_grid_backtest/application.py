@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import date
-from itertools import groupby, product
+from itertools import product
 from pathlib import Path
+from threading import RLock
 
 import duckdb
+from threadpoolctl import threadpool_limits
 from tqdm.auto import tqdm
 
 from stat_arb_backtest import (
@@ -22,7 +25,11 @@ from stat_arb_cluster_count import (
 )
 from stat_arb_clustering import SpongeSymConfig, cluster_stocks_from_snapshot
 from stat_arb_portfolio_weights import assign_portfolio_weights
-from stat_arb_preprocessing import PreprocessingConfig, get_snapshot
+from stat_arb_preprocessing import (
+    PreprocessingConfig,
+    PreprocessingSnapshot,
+    get_snapshot,
+)
 from stat_arb_stock_selection import (
     StockSelectionConfig,
     identify_stocks_to_trade,
@@ -51,29 +58,69 @@ class _ClusterCountCache:
         self.variance_thresholds = variance_thresholds
         self._values: dict[date, dict[float, ClusterCountResult]] = {}
         self._errors: dict[date, Exception] = {}
+        self._lock = RLock()
 
     def get(self, as_of_date: date) -> dict[float, ClusterCountResult]:
-        if as_of_date in self._errors:
-            raise self._errors[as_of_date]
-        if as_of_date not in self._values:
-            try:
-                snapshot = get_snapshot(
-                    self.estimation_config,
-                    as_of_date,
-                    cache=False,
-                )
-                results = calculate_cluster_counts(
-                    snapshot,
-                    self.variance_thresholds,
-                )
-                self._values[as_of_date] = {
-                    result.variance_threshold: result
-                    for result in results
-                }
-            except Exception as exc:
-                self._errors[as_of_date] = exc
-                raise
-        return self._values[as_of_date]
+        with self._lock:
+            if as_of_date in self._errors:
+                raise self._errors[as_of_date]
+            if as_of_date not in self._values:
+                try:
+                    snapshot = get_snapshot(
+                        self.estimation_config,
+                        as_of_date,
+                        cache=False,
+                    )
+                    results = calculate_cluster_counts(
+                        snapshot,
+                        self.variance_thresholds,
+                    )
+                    self._values[as_of_date] = {
+                        result.variance_threshold: result
+                        for result in results
+                    }
+                except Exception as exc:
+                    self._errors[as_of_date] = exc
+                    raise
+            return self._values[as_of_date]
+
+    def get_with_snapshot(
+        self,
+        as_of_date: date,
+    ) -> tuple[
+        dict[float, ClusterCountResult],
+        PreprocessingSnapshot,
+    ]:
+        with self._lock:
+            if as_of_date in self._errors:
+                raise self._errors[as_of_date]
+            cached = self._values.get(as_of_date)
+            if cached is None:
+                try:
+                    snapshot = get_snapshot(
+                        self.estimation_config,
+                        as_of_date,
+                        cache=False,
+                    )
+                    results = calculate_cluster_counts(
+                        snapshot,
+                        self.variance_thresholds,
+                    )
+                    cached = {
+                        result.variance_threshold: result
+                        for result in results
+                    }
+                    self._values[as_of_date] = cached
+                except Exception as exc:
+                    self._errors[as_of_date] = exc
+                    raise
+                return cached, snapshot
+        snapshot = get_snapshot(
+            self.estimation_config,
+            as_of_date,
+            cache=False,
+        )
+        return cached, snapshot
 
 
 class _TargetCache:
@@ -118,12 +165,20 @@ class _TargetCache:
         if as_of_date in self._built_dates:
             return
         try:
-            cluster_counts = self.cluster_counts.get(as_of_date)
-            snapshot = get_snapshot(
-                self.preprocessing_config,
-                as_of_date,
-                cache=False,
-            )
+            if (
+                self.lookback_window
+                == self.cluster_counts.estimation_config.correlation_window
+            ):
+                cluster_counts, snapshot = (
+                    self.cluster_counts.get_with_snapshot(as_of_date)
+                )
+            else:
+                cluster_counts = self.cluster_counts.get(as_of_date)
+                snapshot = get_snapshot(
+                    self.preprocessing_config,
+                    as_of_date,
+                    cache=False,
+                )
         except Exception as exc:
             self._store_error_for_all(as_of_date, exc)
             self._built_dates.add(as_of_date)
@@ -218,23 +273,16 @@ def resolve_grid_date_range(
     config: GridBacktestConfig,
 ) -> tuple[date, date]:
     latest_session = _latest_spy_session(database_path)
-    requested_end = config.end_date or latest_session
-    if requested_end > latest_session:
+    if config.end_date > latest_session:
         raise ValueError(
             f"end_date exceeds latest SPY session {latest_session}"
         )
-    requested_start = config.start_date or _subtract_calendar_years(
-        requested_end,
-        config.default_lookback_years,
-    )
-    if requested_start > requested_end:
-        raise ValueError("start_date must not be after end_date")
-    return requested_start, requested_end
+    return config.start_date, config.end_date
 
 
 def run_grid_backtest(
     preprocessing_config: PreprocessingConfig,
-    grid_config: GridBacktestConfig | None = None,
+    grid_config: GridBacktestConfig,
     *,
     cluster_count_estimation_window: int = (
         DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW
@@ -242,7 +290,27 @@ def run_grid_backtest(
     sponge_config: SpongeSymConfig | None = None,
     show_progress: bool = False,
 ) -> GridBacktestResult:
-    configured_grid = grid_config or GridBacktestConfig()
+    with threadpool_limits(limits=1):
+        return _run_grid_backtest(
+            preprocessing_config,
+            grid_config,
+            cluster_count_estimation_window=(
+                cluster_count_estimation_window
+            ),
+            sponge_config=sponge_config,
+            show_progress=show_progress,
+        )
+
+
+def _run_grid_backtest(
+    preprocessing_config: PreprocessingConfig,
+    grid_config: GridBacktestConfig,
+    *,
+    cluster_count_estimation_window: int,
+    sponge_config: SpongeSymConfig | None,
+    show_progress: bool,
+) -> GridBacktestResult:
+    configured_grid = grid_config
     requested_start, requested_end = resolve_grid_date_range(
         preprocessing_config.database_path,
         configured_grid,
@@ -265,18 +333,34 @@ def run_grid_backtest(
         cluster_count_estimation_window,
         configured_grid.variance_thresholds,
     )
-    runs: list[GridRunResult] = []
+    runs_by_id: dict[str, GridRunResult] = {}
     progress = tqdm(
-        specs,
+        total=len(specs),
         desc="Grid backtest",
         unit="run",
         dynamic_ncols=True,
         disable=not show_progress,
     )
-    for lookback_window, grouped_specs in groupby(
-        progress,
-        key=lambda spec: spec.lookback_window,
-    ):
+    specs_by_lookback = {
+        lookback_window: tuple(
+            spec
+            for spec in specs
+            if spec.lookback_window == lookback_window
+        )
+        for lookback_window in configured_grid.lookback_windows
+    }
+    execution_order = sorted(
+        configured_grid.lookback_windows,
+        key=lambda lookback_window: (
+            lookback_window != cluster_count_estimation_window,
+            lookback_window,
+        ),
+    )
+
+    def run_lookback(
+        lookback_window: int,
+    ) -> tuple[GridRunResult, ...]:
+        lookback_runs: list[GridRunResult] = []
         targets = _TargetCache(
             preprocessing_config,
             lookback_window,
@@ -285,7 +369,7 @@ def run_grid_backtest(
             cluster_counts,
             configured_sponge,
         )
-        for spec in grouped_specs:
+        for spec in specs_by_lookback[lookback_window]:
             try:
                 backtest_config = BacktestConfig(
                     start_date=effective_start,
@@ -307,23 +391,42 @@ def run_grid_backtest(
                     ),
                     show_progress=False,
                 )
-                runs.append(
-                    GridRunResult(
-                        spec=spec,
-                        status="SUCCESS",
-                        metrics=calculate_grid_run_metrics(result),
-                    )
+                run = GridRunResult(
+                    spec=spec,
+                    status="SUCCESS",
+                    metrics=calculate_grid_run_metrics(result),
                 )
             except Exception as exc:
-                runs.append(
-                    GridRunResult(
-                        spec=spec,
-                        status="FAILED",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                    )
+                run = GridRunResult(
+                    spec=spec,
+                    status="FAILED",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
                 )
-    ranked_runs = _rank_runs(tuple(runs))
+            lookback_runs.append(run)
+            progress.update(1)
+        return tuple(lookback_runs)
+
+    maximum_workers = min(3, len(execution_order))
+    try:
+        with ThreadPoolExecutor(
+            max_workers=maximum_workers,
+            thread_name_prefix="grid-lookback",
+        ) as executor:
+            futures = {
+                executor.submit(
+                    run_lookback,
+                    lookback_window,
+                ): lookback_window
+                for lookback_window in execution_order
+            }
+            for future in as_completed(futures):
+                for run in future.result():
+                    runs_by_id[run.spec.run_id] = run
+    finally:
+        progress.close()
+    runs = tuple(runs_by_id[spec.run_id] for spec in specs)
+    ranked_runs = _rank_runs(runs)
     best_run_id = next(
         (
             run.spec.run_id
@@ -433,14 +536,3 @@ def _latest_spy_session(database_path: Path) -> date:
     if row is None or row[0] is None:
         raise ValueError("database contains no SPY trading sessions")
     return row[0]
-
-
-def _subtract_calendar_years(value: date, years: int) -> date:
-    try:
-        return value.replace(year=value.year - years)
-    except ValueError:
-        return value.replace(
-            year=value.year - years,
-            month=2,
-            day=28,
-        )

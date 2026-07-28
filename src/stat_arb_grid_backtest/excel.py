@@ -540,8 +540,8 @@ def _write_parameter_grid(
     _section(sheet, 11, "Fixed settings", 5)
     fixed_rows = (
         ("Setting", "Value", "Unit / policy", "Source", "Notes"),
-        ("Requested start", result.requested_start_date, "date", "GridBacktestConfig", "Defaults to end date minus three calendar years"),
-        ("Requested end", result.requested_end_date, "date", "DuckDB / explicit input", "Defaults to latest SPY trading session"),
+        ("Requested start", result.requested_start_date, "date", "GridBacktestConfig", "Explicit included return date"),
+        ("Requested end", result.requested_end_date, "date", "GridBacktestConfig", "Explicit included return date"),
         ("Effective start", result.effective_start_date, "SPY session", "BacktestMarketDataRepository", "Requested start rolls forward"),
         ("Effective end", result.effective_end_date, "SPY session", "BacktestMarketDataRepository", "Must be an SPY session"),
         ("Beta window", result.beta_window, "sessions", "PreprocessingConfig", "Includes historical session t"),

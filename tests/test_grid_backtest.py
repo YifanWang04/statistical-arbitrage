@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from dataclasses import replace
 from datetime import date
+import io
 from pathlib import Path
 from types import SimpleNamespace
 import math
@@ -32,13 +34,21 @@ from stat_arb_grid_backtest import (
     resolve_grid_date_range,
     run_grid_backtest,
 )
-from stat_arb_grid_backtest.application import _TargetCache, _rank_runs
+from stat_arb_grid_backtest.application import (
+    _ClusterCountCache,
+    _TargetCache,
+    _rank_runs,
+)
+from stat_arb_grid_backtest.cli import build_parser
 from stat_arb_preprocessing import PreprocessingConfig
 
 
 class GridConfigurationTests(unittest.TestCase):
     def test_default_grid_contains_72_stable_combinations(self) -> None:
-        config = GridBacktestConfig()
+        config = GridBacktestConfig(
+            start_date=date(2025, 1, 1),
+            end_date=date(2026, 7, 27),
+        )
         specs = build_grid_run_specs(config)
 
         self.assertEqual(config.combination_count, 72)
@@ -52,6 +62,8 @@ class GridConfigurationTests(unittest.TestCase):
 
     def test_grid_values_are_sorted_deduplicated_and_guarded(self) -> None:
         config = GridBacktestConfig(
+            start_date=date(2025, 1, 1),
+            end_date=date(2026, 7, 27),
             lookback_windows=(20, 5, 5),
             deviation_thresholds=(0.05, 0.0, 0.05),
             variance_thresholds=(0.90, 0.85),
@@ -64,38 +76,30 @@ class GridConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeding"):
             replace(config, maximum_combinations=31)
 
-    def test_default_dates_use_latest_spy_session_and_three_years(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / "market.duckdb"
-            with duckdb.connect(str(database)) as connection:
-                connection.execute("CREATE SCHEMA market_data")
-                connection.execute(
-                    """
-                    CREATE TABLE market_data.market_returns (
-                        trade_date DATE,
-                        ticker VARCHAR
-                    )
-                    """
-                )
-                connection.executemany(
-                    "INSERT INTO market_data.market_returns VALUES (?, 'SPY')",
-                    [
-                        [date(2023, 7, 27)],
-                        [date(2026, 7, 27)],
-                    ],
-                )
+    def test_grid_config_requires_explicit_dates(self) -> None:
+        with self.assertRaisesRegex(TypeError, "start_date"):
+            GridBacktestConfig()
 
-            observed = resolve_grid_date_range(
-                database,
-                GridBacktestConfig(),
-            )
+    def test_cli_requires_explicit_dates(self) -> None:
+        with (
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            build_parser().parse_args(["export"])
 
-        self.assertEqual(
-            observed,
-            (date(2023, 7, 27), date(2026, 7, 27)),
+        args = build_parser().parse_args(
+            [
+                "export",
+                "--start-date",
+                "2025-01-01",
+                "--end-date",
+                "2026-07-27",
+            ]
         )
+        self.assertEqual(args.start_date, date(2025, 1, 1))
+        self.assertEqual(args.end_date, date(2026, 7, 27))
 
-    def test_leap_day_default_start_clamps_to_february_28(self) -> None:
+    def test_explicit_start_and_end_dates_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "market.duckdb"
             with duckdb.connect(str(database)) as connection:
@@ -111,16 +115,22 @@ class GridConfigurationTests(unittest.TestCase):
                 connection.execute(
                     """
                     INSERT INTO market_data.market_returns
-                    VALUES (DATE '2024-02-29', 'SPY')
+                    VALUES (DATE '2026-07-27', 'SPY')
                     """
                 )
-            start, end = resolve_grid_date_range(
-                database,
-                GridBacktestConfig(default_lookback_years=1),
-            )
-        self.assertEqual(start, date(2023, 2, 28))
-        self.assertEqual(end, date(2024, 2, 29))
 
+            observed = resolve_grid_date_range(
+                database,
+                GridBacktestConfig(
+                    start_date=date(2025, 1, 1),
+                    end_date=date(2026, 7, 27),
+                ),
+            )
+
+        self.assertEqual(
+            observed,
+            (date(2025, 1, 1), date(2026, 7, 27)),
+        )
 
 class GridMetricsTests(unittest.TestCase):
     def test_complete_metrics_preserve_step7_metrics_and_boundaries(
@@ -222,6 +232,111 @@ class GridMetricsTests(unittest.TestCase):
 
 
 class GridCacheAndIntegrationTests(unittest.TestCase):
+    def test_parallel_lookbacks_preserve_grid_run_order(self) -> None:
+        market_data, target = _sample_market_data_and_target()
+        grid_config = GridBacktestConfig(
+            start_date=market_data.sessions[0],
+            end_date=market_data.sessions[-1],
+            lookback_windows=(20, 5),
+            deviation_thresholds=(0.0,),
+            variance_thresholds=(0.85,),
+            rebalance_periods=(10,),
+            take_profit_thresholds=(1.0,),
+        )
+
+        with (
+            patch(
+                "stat_arb_grid_backtest.application.resolve_grid_date_range",
+                return_value=(
+                    market_data.sessions[0],
+                    market_data.sessions[-1],
+                ),
+            ),
+            patch(
+                "stat_arb_grid_backtest.application.BacktestMarketDataRepository",
+                return_value=SimpleNamespace(
+                    load=lambda _: market_data,
+                ),
+            ),
+            patch(
+                "stat_arb_grid_backtest.application._TargetCache.get",
+                side_effect=lambda as_of_date, *_: replace(
+                    target,
+                    as_of_date=as_of_date,
+                ),
+            ),
+        ):
+            observed = run_grid_backtest(
+                PreprocessingConfig(Path("unused.duckdb")),
+                grid_config,
+            )
+
+        self.assertEqual(
+            [
+                (run.spec.run_id, run.spec.lookback_window)
+                for run in observed.runs
+            ],
+            [("G0001", 5), ("G0002", 20)],
+        )
+
+    def test_target_cache_reuses_cluster_count_snapshot_for_same_window(
+        self,
+    ) -> None:
+        preprocessing = PreprocessingConfig(
+            database_path=Path("unused.duckdb"),
+        )
+        snapshot = SimpleNamespace(stock_return_matrix="raw")
+        cluster_count = SimpleNamespace(variance_threshold=0.90)
+
+        with (
+            patch(
+                "stat_arb_grid_backtest.application.get_snapshot",
+                return_value=snapshot,
+            ) as get_snapshot,
+            patch(
+                "stat_arb_grid_backtest.application.calculate_cluster_counts",
+                return_value=(cluster_count,),
+            ),
+            patch(
+                "stat_arb_grid_backtest.application.cluster_stocks_from_snapshot",
+                return_value="cluster",
+            ),
+            patch(
+                "stat_arb_grid_backtest.application.identify_stocks_to_trade",
+                return_value="selection",
+            ),
+            patch(
+                "stat_arb_grid_backtest.application.assign_portfolio_weights",
+                return_value="weights",
+            ),
+            patch(
+                "stat_arb_grid_backtest.application.target_from_portfolio_weights",
+                return_value="target",
+            ),
+        ):
+            cluster_counts = _ClusterCountCache(
+                preprocessing,
+                20,
+                (0.90,),
+            )
+            targets = _TargetCache(
+                preprocessing,
+                20,
+                (0.05,),
+                (0.90,),
+                cluster_counts,
+                SpongeSymConfig(),
+            )
+
+            observed = targets.get(
+                date(2026, 1, 5),
+                0.90,
+                0.05,
+            )
+
+        self.assertEqual(observed, "target")
+        self.assertEqual(get_snapshot.call_count, 1)
+
     def test_target_cache_reuses_snapshot_and_clustering_across_p(
         self,
     ) -> None:

@@ -48,8 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the grid and export the five-sheet metrics workbook",
     )
     export.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
-    export.add_argument("--start-date", type=_date, default=None)
-    export.add_argument("--end-date", type=_date, default=None)
+    export.add_argument("--start-date", type=_date, required=True)
+    export.add_argument("--end-date", type=_date, required=True)
     export.add_argument(
         "--lookback-windows",
         nargs="+",
@@ -82,7 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export.add_argument("--initial-nav", type=float, default=1.0)
     export.add_argument("--annualization-sessions", type=int, default=252)
-    export.add_argument("--default-lookback-years", type=int, default=3)
     export.add_argument(
         "--maximum-combinations",
         type=int,
@@ -121,7 +120,6 @@ def main(argv: list[str] | None = None) -> int:
             ),
             initial_nav=args.initial_nav,
             annualization_sessions=args.annualization_sessions,
-            default_lookback_years=args.default_lookback_years,
             maximum_combinations=args.maximum_combinations,
         )
         requested_start, requested_end = resolve_grid_date_range(

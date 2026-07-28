@@ -14,15 +14,14 @@ DEFAULT_DEVIATION_THRESHOLDS = (0.0, 0.05)
 DEFAULT_VARIANCE_THRESHOLDS = (0.85, 0.90)
 DEFAULT_REBALANCE_PERIODS = (3, 5, 10)
 DEFAULT_TAKE_PROFIT_THRESHOLDS = (0.03, 0.05)
-DEFAULT_LOOKBACK_YEARS = 3
 DEFAULT_MAXIMUM_COMBINATIONS = 1_000
 GRID_CALCULATION_VERSION = "five_parameter_grid_backtest_v1"
 
 
 @dataclass(frozen=True)
 class GridBacktestConfig:
-    start_date: date | None = None
-    end_date: date | None = None
+    start_date: date
+    end_date: date
     lookback_windows: tuple[int, ...] = DEFAULT_LOOKBACK_WINDOWS
     deviation_thresholds: tuple[float, ...] = DEFAULT_DEVIATION_THRESHOLDS
     variance_thresholds: tuple[float, ...] = DEFAULT_VARIANCE_THRESHOLDS
@@ -32,15 +31,10 @@ class GridBacktestConfig:
     )
     initial_nav: float = 1.0
     annualization_sessions: int = 252
-    default_lookback_years: int = DEFAULT_LOOKBACK_YEARS
     maximum_combinations: int = DEFAULT_MAXIMUM_COMBINATIONS
 
     def __post_init__(self) -> None:
-        if (
-            self.start_date is not None
-            and self.end_date is not None
-            and self.start_date > self.end_date
-        ):
+        if self.start_date > self.end_date:
             raise ValueError("start_date must not be after end_date")
         object.__setattr__(
             self,
@@ -92,7 +86,6 @@ class GridBacktestConfig:
         )
         for name, value in (
             ("annualization_sessions", self.annualization_sessions),
-            ("default_lookback_years", self.default_lookback_years),
             ("maximum_combinations", self.maximum_combinations),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:

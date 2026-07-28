@@ -69,7 +69,7 @@ python -m venv .venv
 
 注意：
 
-- 单日导出脚本当前示例日期为 `2026-07-17`；第七步回测脚本显式设置起止日，第八步网格脚本默认使用数据库最新 SPY 日及此前三个日历年；
+- 单日导出脚本当前示例日期为 `2026-07-17`；第七步回测和第八步网格脚本都显式设置起止日；
 - 多个 IDE 导出脚本当前设置 `REPLACE_EXISTING=True`；
 - `run_data_download.py` 当前设置 `CANDIDATE_POOL_SIZE=1500`、`REPLACE_EXISTING_DATABASE=True`；
 - 这些是脚本内的当前设置，不是 CLI 的安全默认值。
@@ -317,7 +317,7 @@ l = [3, 5, 10]
 q = [0.03, 0.05]
 ```
 
-共 72 组。默认结束日取数据库最新 SPY 交易日，开始请求日为结束日前三个日历年；也可以显式指定统一样本区间：
+共 72 组。网格内所有组合使用同一个显式指定的样本区间：
 
 ```powershell
 .\.venv\Scripts\python.exe -m stat_arb_grid_backtest export `
@@ -397,7 +397,7 @@ Excel 工作表：
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-28，共 100 项测试，全部通过。测试覆盖：
+截至 2026-07-28，共 101 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -412,7 +412,7 @@ Excel 工作表：
 - 回测全链路只读 DuckDB 边界；
 - FIFO 买入 lot、部分卖出、跨 lot 卖出、最终卖价和已实现收益；
 - Excel 精简视图、隐藏技术审计列、合并动作表、持仓周期表和禁止静默覆盖。
-- 五参数网格组合、默认三年样本、缓存复用、完整指标、Sharpe 排名及五表 Excel 报告。
+- 五参数网格组合、显式统一样本、缓存复用、完整指标、Sharpe 排名及五表 Excel 报告。
 
 ## 代码结构
 
