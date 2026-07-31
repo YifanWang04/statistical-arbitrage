@@ -18,18 +18,18 @@ from stat_arb_stock_selection import StockSelectionConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
-START_DATE = date(2023, 1, 1)
-END_DATE = date(2026, 7, 27)
+START_DATE = date(2020, 1, 1)
+END_DATE = date(2026, 7, 30)
 ## w window for correlation matrix calculation, used in clustering and stock selection
-LOOKBACK_WINDOW = 10
+LOOKBACK_WINDOW = 5
 ## p deviation threshold for stock selection
 DEVIATION_THRESHOLD = 0.03
 ## P variance threshold for clustering, used in cluster count estimation and clustering
-VARIANCE_THRESHOLD = 0.9
+VARIANCE_THRESHOLD = 0.85
 ## l rebalance period in days
-REBALANCE_PERIOD = 10
+REBALANCE_PERIOD = 3
 ## q
-TAKE_PROFIT_THRESHOLD = 0.015
+TAKE_PROFIT_THRESHOLD = 0.05
 
 INITIAL_NAV = 1.0
 ANNUALIZATION_SESSIONS = 252

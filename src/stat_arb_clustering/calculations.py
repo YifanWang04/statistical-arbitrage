@@ -23,6 +23,7 @@ CALCULATION_VERSION = "sponge_sym_paper_text_v1"
 SIGNET_COMPAT_CALCULATION_VERSION = "sponge_sym_signet_compat_v1"
 CORRELATION_TOLERANCE = 1e-12
 EIGENVALUE_EPSILON = 1e-12
+LOBPCG_TOLERANCE = 1e-5
 SIGNET_ZERO_DEGREE_FLOOR = 1.0 / 999_999_999.0
 
 
@@ -289,6 +290,7 @@ def _smallest_generalized_eigenpairs(
                 numerator,
                 initial,
                 B=denominator,
+                tol=LOBPCG_TOLERANCE,
                 maxiter=size,
                 largest=False,
             )

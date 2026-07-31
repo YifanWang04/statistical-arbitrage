@@ -255,7 +255,7 @@ class GridCacheAndIntegrationTests(unittest.TestCase):
             patch(
                 "stat_arb_grid_backtest.application.BacktestMarketDataRepository",
                 return_value=SimpleNamespace(
-                    load=lambda _: market_data,
+                    load=lambda _, **__: market_data,
                 ),
             ),
             patch(
@@ -424,7 +424,7 @@ class GridCacheAndIntegrationTests(unittest.TestCase):
             patch(
                 "stat_arb_grid_backtest.application.BacktestMarketDataRepository",
                 return_value=SimpleNamespace(
-                    load=lambda _: market_data,
+                    load=lambda _, **__: market_data,
                 ),
             ),
             patch(
@@ -482,7 +482,7 @@ class GridCacheAndIntegrationTests(unittest.TestCase):
             patch(
                 "stat_arb_grid_backtest.application.BacktestMarketDataRepository",
                 return_value=SimpleNamespace(
-                    load=lambda _: market_data,
+                    load=lambda _, **__: market_data,
                 ),
             ),
             patch(

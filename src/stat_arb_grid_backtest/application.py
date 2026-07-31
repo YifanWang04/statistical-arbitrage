@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 from stat_arb_backtest import (
     BacktestConfig,
     BacktestTarget,
+    required_prior_sessions_for_signals,
     simulate_backtest,
     target_from_portfolio_weights,
 )
@@ -356,7 +357,14 @@ def _run_grid_backtest(
     )
     market_data = BacktestMarketDataRepository(
         preprocessing_config.database_path
-    ).load(market_request)
+    ).load(
+        market_request,
+        minimum_prior_sessions=required_prior_sessions_for_signals(
+            preprocessing_config,
+            cluster_count_estimation_window,
+            correlation_window=max(configured_grid.lookback_windows),
+        ),
+    )
     effective_start = market_data.sessions[0]
     effective_end = market_data.sessions[-1]
     configured_sponge = sponge_config or SpongeSymConfig()

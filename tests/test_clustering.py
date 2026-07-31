@@ -116,6 +116,17 @@ class SpongeSymCalculationTests(unittest.TestCase):
         self.assertEqual(result.quality.nonempty_cluster_count, 4)
         self.assertEqual(result.cluster_sizes, (1, 1, 1, 1))
 
+    def test_accepts_lobpcg_residual_below_explicit_tolerance(self) -> None:
+        returns = np.random.RandomState(53).normal(size=(5, 100))
+        correlation = np.corrcoef(returns, rowvar=False)
+
+        result = cluster_sponge_sym(make_snapshot(correlation), 12)
+
+        self.assertLess(
+            result.quality.maximum_generalized_eigen_residual,
+            1e-5,
+        )
+
     def test_symmetrizes_input_and_clears_diagonal_before_decomposition(self) -> None:
         snapshot = make_snapshot(
             np.array(

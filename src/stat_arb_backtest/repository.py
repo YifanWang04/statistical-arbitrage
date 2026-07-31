@@ -20,7 +20,18 @@ class BacktestMarketDataRepository:
                 f"Database does not exist: {self.database_path}"
             )
 
-    def load(self, config: BacktestConfig) -> BacktestMarketData:
+    def load(
+        self,
+        config: BacktestConfig,
+        *,
+        minimum_prior_sessions: int = 1,
+    ) -> BacktestMarketData:
+        if (
+            isinstance(minimum_prior_sessions, bool)
+            or not isinstance(minimum_prior_sessions, int)
+            or minimum_prior_sessions < 1
+        ):
+            raise ValueError("minimum_prior_sessions must be a positive integer")
         with duckdb.connect(str(self.database_path), read_only=True) as connection:
             calendar = tuple(
                 row[0]
@@ -43,14 +54,16 @@ class BacktestMarketDataRepository:
                     "start_date has no SPY trading session on or after it: "
                     f"{config.start_date}"
                 )
+            start_index = max(start_index, minimum_prior_sessions)
+            if start_index >= len(calendar):
+                raise ValueError(
+                    "start_date has no SPY return session with at least "
+                    f"{minimum_prior_sessions} prior sessions"
+                )
             effective_start_date = calendar[start_index]
             end_index = calendar.index(config.end_date)
             if end_index < start_index:
                 raise ValueError("end_date must not precede start_date")
-            if start_index == 0:
-                raise ValueError(
-                    "start_date has no previous SPY close for initial execution"
-                )
             previous_session = calendar[start_index - 1]
             sessions = calendar[start_index : end_index + 1]
 

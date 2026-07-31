@@ -9,6 +9,7 @@ from .calculations import (
 from .application import (
     DEFAULT_PROJECT_DEVIATION_THRESHOLD,
     export_backtest_report,
+    required_prior_sessions_for_signals,
     run_backtest,
     target_from_portfolio_weights,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "calculate_performance_metrics",
     "export_backtest_report",
     "export_backtest_workbook",
+    "required_prior_sessions_for_signals",
     "run_backtest",
     "simulate_backtest",
     "target_from_portfolio_weights",

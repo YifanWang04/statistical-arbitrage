@@ -29,6 +29,25 @@ from .repository import BacktestMarketDataRepository
 DEFAULT_PROJECT_DEVIATION_THRESHOLD = 0.05
 
 
+def required_prior_sessions_for_signals(
+    preprocessing_config: PreprocessingConfig,
+    cluster_count_estimation_window: int,
+    *,
+    correlation_window: int | None = None,
+) -> int:
+    signal_window = max(
+        (
+            preprocessing_config.correlation_window
+            if correlation_window is None
+            else correlation_window
+        ),
+        cluster_count_estimation_window,
+    )
+    # The first Close establishes the price scale but cannot produce a
+    # close-to-close return, so it does not count toward the beta window.
+    return preprocessing_config.beta_window + signal_window
+
+
 def run_backtest(
     preprocessing_config: PreprocessingConfig,
     backtest_config: BacktestConfig,
@@ -45,7 +64,13 @@ def run_backtest(
     )
     market_data = BacktestMarketDataRepository(
         preprocessing_config.database_path
-    ).load(backtest_config)
+    ).load(
+        backtest_config,
+        minimum_prior_sessions=required_prior_sessions_for_signals(
+            preprocessing_config,
+            cluster_count_estimation_window,
+        ),
+    )
     effective_backtest_config = replace(
         backtest_config,
         start_date=market_data.sessions[0],

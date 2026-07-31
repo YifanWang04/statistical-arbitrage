@@ -22,6 +22,7 @@ from stat_arb_backtest import (
     simulate_backtest,
 )
 from stat_arb_backtest.cli import build_parser
+from stat_arb_backtest.repository import BacktestMarketDataRepository
 from stat_arb_preprocessing import PreprocessingConfig, build_preprocessing
 from tests.test_preprocessing import build_test_database
 
@@ -780,6 +781,71 @@ class BacktestCalculationTests(unittest.TestCase):
 
 
 class BacktestIntegrationTests(unittest.TestCase):
+    def test_market_data_rolls_start_past_first_close_without_a_prior_close(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database, dates = build_test_database(Path(directory))
+            add_close_prices(database)
+            calendar = tuple(value.date() for value in dates)
+
+            market_data = BacktestMarketDataRepository(database).load(
+                BacktestConfig(
+                    start_date=date(2020, 1, 1),
+                    end_date=calendar[2],
+                )
+            )
+
+            self.assertEqual(market_data.previous_session, calendar[0])
+            self.assertEqual(market_data.sessions, calendar[1:3])
+
+    def test_run_backtest_rolls_early_start_to_first_signal_ready_session(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database, dates = build_test_database(Path(directory))
+            add_close_prices(database)
+            first_session = dates[0].date()
+            with duckdb.connect(str(database)) as connection:
+                connection.execute(
+                    """
+                    UPDATE market_data.daily_prices
+                    SET price_return = NULL
+                    WHERE trade_date = ?
+                    """,
+                    [first_session],
+                )
+                connection.execute(
+                    """
+                    UPDATE market_data.market_returns
+                    SET market_return = NULL
+                    WHERE trade_date = ?
+                    """,
+                    [first_session],
+                )
+            preprocessing_config = PreprocessingConfig(
+                database_path=database,
+                beta_window=40,
+                correlation_window=5,
+            )
+            build_preprocessing(preprocessing_config)
+            calendar = tuple(value.date() for value in dates)
+
+            result = run_backtest(
+                preprocessing_config,
+                BacktestConfig(
+                    start_date=date(2020, 1, 1),
+                    end_date=calendar[62],
+                    take_profit_threshold=1.0,
+                ),
+            )
+
+            self.assertEqual(result.config.start_date, calendar[60])
+            self.assertEqual(
+                tuple(row.trade_date for row in result.daily_performance),
+                calendar[60:63],
+            )
+
     def test_run_backtest_rolls_non_trading_start_to_next_spy_session(
         self,
     ) -> None:

@@ -75,7 +75,7 @@ class GridParallelismTests(unittest.TestCase):
             ),
             patch(
                 "stat_arb_grid_backtest.application.BacktestMarketDataRepository",
-                return_value=SimpleNamespace(load=lambda _: market_data),
+                return_value=SimpleNamespace(load=lambda _, **__: market_data),
             ),
             patch(
                 "stat_arb_grid_backtest.application._TargetCache.get",

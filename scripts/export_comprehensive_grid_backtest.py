@@ -1,4 +1,4 @@
-"""IDE entry point: run step 8 and export the grid-ranking workbook."""
+"""IDE entry point: run the coarse 432-combination step-8 grid."""
 
 from datetime import date
 from pathlib import Path
@@ -17,15 +17,20 @@ from stat_arb_preprocessing import PreprocessingConfig
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
 
-# The start and end dates are included SPY return dates.
+# Keep the same sample as the 144-run grid so results remain comparable.
 START_DATE = date(2023, 1, 1)
 END_DATE = date(2026, 7, 27)
-LOOKBACK_WINDOWS = (5, 10, 20, 30)
-DEVIATION_THRESHOLDS = (0.08, 0.05, 0.03) ## deviation > p  → winner; deviation < -p → loser
-VARIANCE_THRESHOLDS = (0.90, 0.85) ## 元组，即使一个元素，也需要保留逗号
-REBALANCE_PERIODS = (3, 5, 10)
-TAKE_PROFIT_THRESHOLDS = (0.015, 0.03, 0.05, 0.1)
 
+# Use a coarse extension of the original grid. The main additions are the
+# paper p=0 baseline and two controls around the original P=90% setting.
+# 4 * 3 * 3 * 3 * 4 = 432 combinations.
+LOOKBACK_WINDOWS = (5, 10, 20, 30)
+DEVIATION_THRESHOLDS = (0.0, 0.03, 0.05)
+VARIANCE_THRESHOLDS = (0.85, 0.90, 0.95)
+REBALANCE_PERIODS = (3, 5, 10)
+TAKE_PROFIT_THRESHOLDS = (0.015, 0.03, 0.05, 0.10)
+
+EXPECTED_COMBINATION_COUNT = 432
 INITIAL_NAV = 1.0
 ANNUALIZATION_SESSIONS = 252
 MAXIMUM_COMBINATIONS = 1_000
@@ -36,7 +41,7 @@ RANDOM_SEED = 0
 KMEANS_N_INIT = 10
 REPLACE_EXISTING = True
 SHOW_PROGRESS = True
-MAX_WORKERS = DEFAULT_MAX_WORKERS # 5
+MAX_WORKERS = DEFAULT_MAX_WORKERS
 
 
 def main() -> None:
@@ -55,6 +60,13 @@ def main() -> None:
         annualization_sessions=ANNUALIZATION_SESSIONS,
         maximum_combinations=MAXIMUM_COMBINATIONS,
     )
+    if grid_config.combination_count != EXPECTED_COMBINATION_COUNT:
+        raise RuntimeError(
+            "comprehensive grid combination count changed: "
+            f"expected {EXPECTED_COMBINATION_COUNT}, "
+            f"observed {grid_config.combination_count}"
+        )
+
     requested_start, requested_end = resolve_grid_date_range(
         DATABASE_PATH,
         grid_config,
@@ -64,8 +76,8 @@ def main() -> None:
         / "outputs"
         / "step8_grid_backtest"
         / (
-            f"grid_backtest_{requested_start.isoformat()}_"
-            f"{requested_end.isoformat()}.xlsx"
+            "grid_backtest_comprehensive_432_"
+            f"{requested_start.isoformat()}_{requested_end.isoformat()}.xlsx"
         )
     )
     result, output = export_grid_backtest_report(
@@ -83,7 +95,7 @@ def main() -> None:
         show_progress=SHOW_PROGRESS,
         max_workers=MAX_WORKERS,
     )
-    print(f"Grid backtest workbook exported: {output}")
+    print(f"Comprehensive grid workbook exported: {output}")
     print(
         f"Runs: {len(result.runs)}; "
         f"successful: {result.successful_run_count}; "
