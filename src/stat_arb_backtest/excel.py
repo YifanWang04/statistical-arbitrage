@@ -7,12 +7,14 @@ from pathlib import Path
 import tempfile
 
 from openpyxl import Workbook
-from openpyxl.formatting.rule import FormulaRule
+from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .calculations import calculate_period_performance
 from .models import (
     BacktestResult,
+    PeriodPerformance,
     RebalanceEvent,
     TargetWeightRecord,
     TradeRecord,
@@ -69,6 +71,7 @@ def export_backtest_workbook(
     workbook = Workbook()
     workbook.remove(workbook.active)
     summary = workbook.create_sheet("Summary")
+    periods = workbook.create_sheet("Period_Performance")
     daily = workbook.create_sheet("Daily_Performance")
     events = workbook.create_sheet("Rebalance_Events")
     actions = workbook.create_sheet("Portfolio_Actions")
@@ -76,6 +79,7 @@ def export_backtest_workbook(
     missing = workbook.create_sheet("Missing_Data_Audit")
 
     _write_summary(summary, result)
+    _write_period_performance(periods, result)
     _write_daily_performance(daily, result)
     _write_rebalance_events(events, result)
     _write_portfolio_actions(actions, result)
@@ -454,6 +458,318 @@ def _write_daily_performance(
             f"I2:I{sheet.max_row}",
             FormulaRule(formula=['I2="scheduled"'], fill=SECTION_FILL),
         )
+
+
+def _write_period_performance(
+    sheet: Worksheet,
+    result: BacktestResult,
+) -> None:
+    annual = calculate_period_performance(
+        result.daily_performance,
+        frequency="year",
+        annualization_sessions=result.config.annualization_sessions,
+    )
+    monthly = calculate_period_performance(
+        result.daily_performance,
+        frequency="month",
+        annualization_sessions=result.config.annualization_sessions,
+    )
+
+    sheet.merge_cells("A1:N1")
+    sheet["A1"] = (
+        f"Calendar Period Performance — {result.config.start_date.isoformat()} "
+        f"to {result.config.end_date.isoformat()}"
+    )
+    sheet["A1"].fill = HEADER_FILL
+    sheet["A1"].font = Font(color=WHITE, bold=True, size=15)
+    sheet["A1"].alignment = Alignment(vertical="center")
+    sheet.row_dimensions[1].height = 28
+
+    sheet.merge_cells("A2:N2")
+    sheet["A2"] = (
+        "Returns compound the report's daily close-to-close returns within each "
+        "calendar period. Excess return is Strategy minus SPY; volatility and "
+        "Sharpe are annualized with the configured session count."
+    )
+    sheet["A2"].alignment = WRAPPED_ALIGNMENT
+    sheet.row_dimensions[2].height = 32
+
+    annual_end = _write_period_table(
+        sheet,
+        title_row=4,
+        title="Annual Performance",
+        periods=annual,
+        period_format="yyyy",
+    )
+    strategy_heatmap_end = _write_monthly_heatmap(
+        sheet,
+        title_row=annual_end + 3,
+        title="Monthly Strategy Return Heatmap",
+        monthly=monthly,
+        annual=annual,
+        value_attribute="strategy_return",
+    )
+    excess_heatmap_end = _write_monthly_heatmap(
+        sheet,
+        title_row=strategy_heatmap_end + 3,
+        title="Monthly Excess Return vs SPY Heatmap",
+        monthly=monthly,
+        annual=annual,
+        value_attribute="excess_return",
+    )
+    _write_period_table(
+        sheet,
+        title_row=excess_heatmap_end + 3,
+        title="Monthly Performance Detail",
+        periods=monthly,
+        period_format="yyyy-mm",
+    )
+
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = "A5"
+    widths = {
+        "A": 15,
+        "B": 12,
+        "C": 18,
+        "D": 18,
+        "E": 18,
+        "F": 20,
+        "G": 18,
+        "H": 17,
+        "I": 15,
+        "J": 20,
+        "K": 18,
+        "L": 12,
+        "M": 12,
+        "N": 14,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+
+
+def _write_period_table(
+    sheet: Worksheet,
+    *,
+    title_row: int,
+    title: str,
+    periods: Sequence[PeriodPerformance],
+    period_format: str,
+) -> int:
+    headers = (
+        "Period",
+        "Sessions",
+        "Strategy Return",
+        "SPY Return",
+        "Excess Return",
+        "Strategy Ann. Volatility",
+        "SPY Ann. Volatility",
+        "Strategy Sharpe",
+        "SPY Sharpe",
+        "Strategy Max Drawdown",
+        "SPY Max Drawdown",
+    )
+    _write_block_title(sheet, title_row, title, end_column=len(headers))
+    header_row = title_row + 1
+    for column, header in enumerate(headers, start=1):
+        cell = sheet.cell(header_row, column, value=header)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = HEADER_BORDER
+    sheet.row_dimensions[header_row].height = 32
+
+    for row_number, period in enumerate(periods, start=header_row + 1):
+        values = (
+            period.period_start,
+            period.session_count,
+            period.strategy_return,
+            period.spy_return,
+            period.excess_return,
+            period.strategy_annualized_volatility,
+            period.spy_annualized_volatility,
+            period.strategy_sharpe_ratio,
+            period.spy_sharpe_ratio,
+            period.strategy_max_drawdown,
+            period.spy_max_drawdown,
+        )
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row_number, column, value=value)
+            if row_number % 2 == 0:
+                cell.fill = STRIPE_FILL
+        sheet.cell(row_number, 1).number_format = period_format
+        sheet.cell(row_number, 2).number_format = "0"
+        for column in range(3, 8):
+            sheet.cell(row_number, column).number_format = PERCENT_FORMAT
+        for column in (8, 9):
+            sheet.cell(row_number, column).number_format = RATIO_FORMAT
+        for column in (10, 11):
+            sheet.cell(row_number, column).number_format = PERCENT_FORMAT
+
+    end_row = header_row + len(periods)
+    if periods:
+        return_values = [
+            value
+            for period in periods
+            for value in (
+                period.strategy_return,
+                period.spy_return,
+                period.excess_return,
+            )
+        ]
+        _add_zero_centered_scale(
+            sheet,
+            f"C{header_row + 1}:E{end_row}",
+            return_values,
+        )
+        drawdowns = [
+            value
+            for period in periods
+            for value in (
+                period.strategy_max_drawdown,
+                period.spy_max_drawdown,
+            )
+        ]
+        _add_drawdown_scale(
+            sheet,
+            f"J{header_row + 1}:K{end_row}",
+            drawdowns,
+        )
+    return end_row
+
+
+def _write_monthly_heatmap(
+    sheet: Worksheet,
+    *,
+    title_row: int,
+    title: str,
+    monthly: Sequence[PeriodPerformance],
+    annual: Sequence[PeriodPerformance],
+    value_attribute: str,
+) -> int:
+    _write_block_title(sheet, title_row, title, end_column=14)
+    header_row = title_row + 1
+    headers = (
+        "Year",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+        "Year",
+    )
+    for column, header in enumerate(headers, start=1):
+        cell = sheet.cell(header_row, column, value=header)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = HEADER_BORDER
+
+    monthly_lookup = {
+        (period.period_start.year, period.period_start.month): period
+        for period in monthly
+    }
+    annual_lookup = {
+        period.period_start.year: period
+        for period in annual
+    }
+    years = sorted(annual_lookup)
+    scale_values: list[float] = []
+    for row_number, year in enumerate(years, start=header_row + 1):
+        sheet.cell(row_number, 1, value=year).font = Font(bold=True)
+        for month in range(1, 13):
+            period = monthly_lookup.get((year, month))
+            value = (
+                getattr(period, value_attribute)
+                if period is not None
+                else None
+            )
+            cell = sheet.cell(row_number, month + 1, value=value)
+            cell.number_format = PERCENT_FORMAT
+            if value is not None:
+                scale_values.append(float(value))
+        annual_value = getattr(annual_lookup[year], value_attribute)
+        annual_cell = sheet.cell(row_number, 14, value=annual_value)
+        annual_cell.number_format = PERCENT_FORMAT
+        annual_cell.font = Font(bold=True)
+        scale_values.append(float(annual_value))
+
+    end_row = header_row + len(years)
+    if years:
+        _add_zero_centered_scale(
+            sheet,
+            f"B{header_row + 1}:N{end_row}",
+            scale_values,
+        )
+    return end_row
+
+
+def _write_block_title(
+    sheet: Worksheet,
+    row: int,
+    label: str,
+    *,
+    end_column: int,
+) -> None:
+    sheet.merge_cells(
+        start_row=row,
+        start_column=1,
+        end_row=row,
+        end_column=end_column,
+    )
+    cell = sheet.cell(row, 1, value=label)
+    cell.fill = SECTION_FILL
+    cell.font = Font(bold=True, color=NAVY)
+    cell.border = HEADER_BORDER
+
+
+def _add_zero_centered_scale(
+    sheet: Worksheet,
+    reference: str,
+    values: Sequence[float],
+) -> None:
+    maximum = max((abs(float(value)) for value in values), default=0.0)
+    maximum = maximum if maximum > 0.0 else 0.01
+    sheet.conditional_formatting.add(
+        reference,
+        ColorScaleRule(
+            start_type="num",
+            start_value=-maximum,
+            start_color="F8696B",
+            mid_type="num",
+            mid_value=0.0,
+            mid_color=WHITE,
+            end_type="num",
+            end_value=maximum,
+            end_color="63BE7B",
+        ),
+    )
+
+
+def _add_drawdown_scale(
+    sheet: Worksheet,
+    reference: str,
+    values: Sequence[float],
+) -> None:
+    maximum = max((abs(float(value)) for value in values), default=0.0)
+    maximum = maximum if maximum > 0.0 else 0.01
+    sheet.conditional_formatting.add(
+        reference,
+        ColorScaleRule(
+            start_type="num",
+            start_value=-maximum,
+            start_color="F8696B",
+            end_type="num",
+            end_value=0.0,
+            end_color=WHITE,
+        ),
+    )
 
 
 def _write_rebalance_events(

@@ -15,6 +15,7 @@ from stat_arb_backtest import (
     BacktestMarketData,
     BacktestTarget,
     TargetWeight,
+    calculate_period_performance,
     calculate_performance_metrics,
     export_backtest_workbook,
     run_backtest,
@@ -447,6 +448,69 @@ class BacktestCalculationTests(unittest.TestCase):
             (252**0.5) * expected_mean / expected_downside,
         )
 
+    def test_period_performance_compounds_calendar_years_and_months(self) -> None:
+        previous = date(2025, 12, 29)
+        sessions = (
+            date(2025, 12, 30),
+            date(2025, 12, 31),
+            date(2026, 1, 2),
+            date(2026, 2, 2),
+        )
+        closes = pd.DataFrame(
+            {
+                "AAA": [100.0, 110.0, 99.0, 108.9, 103.455],
+                "SPY": [100.0, 102.0, 100.98, 104.0094, 101.929212],
+            },
+            index=pd.Index((previous, *sessions), name="trade_date"),
+        )
+        target = BacktestTarget(
+            sessions[0],
+            1,
+            1,
+            (TargetWeight("AAA", 1.0),),
+        )
+        result = simulate_backtest(
+            BacktestMarketData(previous, sessions, closes),
+            BacktestConfig(
+                sessions[0],
+                sessions[-1],
+                rebalance_period=10,
+                take_profit_threshold=10.0,
+            ),
+            lambda _: target,
+        )
+
+        annual = calculate_period_performance(
+            result.daily_performance,
+            frequency="year",
+            annualization_sessions=252,
+        )
+        monthly = calculate_period_performance(
+            result.daily_performance,
+            frequency="month",
+            annualization_sessions=252,
+        )
+
+        self.assertEqual(
+            [(row.period_start.year, row.session_count) for row in annual],
+            [(2025, 2), (2026, 2)],
+        )
+        self.assertAlmostEqual(annual[0].strategy_return, -0.01)
+        self.assertAlmostEqual(annual[0].spy_return, 0.0098)
+        self.assertAlmostEqual(annual[0].excess_return, -0.0198)
+        self.assertAlmostEqual(annual[0].strategy_max_drawdown, -0.10)
+        self.assertAlmostEqual(annual[1].strategy_return, 0.045)
+        self.assertAlmostEqual(annual[1].strategy_max_drawdown, -0.05)
+        self.assertEqual(
+            [
+                (row.period_start.year, row.period_start.month)
+                for row in monthly
+            ],
+            [(2025, 12), (2026, 1), (2026, 2)],
+        )
+        self.assertAlmostEqual(monthly[1].strategy_return, 0.10)
+        self.assertAlmostEqual(monthly[2].strategy_return, -0.05)
+
     def test_unfilled_initial_buy_stays_cash_and_is_audited(self) -> None:
         previous = date(2026, 1, 2)
         start = date(2026, 1, 5)
@@ -802,7 +866,7 @@ class BacktestIntegrationTests(unittest.TestCase):
                 ).fetchone()[0]
             self.assertEqual(backtest_tables, 0)
 
-    def test_excel_contains_six_audit_sheets_and_refuses_overwrite(self) -> None:
+    def test_excel_contains_period_performance_and_refuses_overwrite(self) -> None:
         previous = date(2026, 1, 2)
         start = date(2026, 1, 5)
         closes = pd.DataFrame(
@@ -853,6 +917,7 @@ class BacktestIntegrationTests(unittest.TestCase):
                 workbook.sheetnames,
                 [
                     "Summary",
+                    "Period_Performance",
                     "Daily_Performance",
                     "Rebalance_Events",
                     "Portfolio_Actions",
@@ -865,6 +930,18 @@ class BacktestIntegrationTests(unittest.TestCase):
                 summary["B7"].value,
                 result.strategy_metrics.total_return,
             )
+            periods = workbook["Period_Performance"]
+            self.assertEqual(periods["A4"].value, "Annual Performance")
+            self.assertEqual(periods["A5"].value, "Period")
+            self.assertEqual(periods["A6"].value.year, 2026)
+            self.assertAlmostEqual(periods["C6"].value, 0.05)
+            self.assertEqual(
+                periods["A9"].value,
+                "Monthly Strategy Return Heatmap",
+            )
+            self.assertAlmostEqual(periods["B11"].value, 0.05)
+            self.assertAlmostEqual(periods["N11"].value, 0.05)
+            self.assertEqual(len(list(periods.conditional_formatting)), 6)
             self.assertEqual(workbook["Daily_Performance"].max_row, 2)
             self.assertEqual(workbook["Rebalance_Events"]["C2"].value, "initial")
             action_sheet = workbook["Portfolio_Actions"]

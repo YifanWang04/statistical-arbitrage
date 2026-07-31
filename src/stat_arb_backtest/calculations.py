@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 import math
@@ -16,6 +16,7 @@ from .models import (
     BacktestTarget,
     DailyPerformance,
     MissingDataAudit,
+    PeriodPerformance,
     PerformanceMetrics,
     PositionLotRecord,
     RebalanceEvent,
@@ -794,6 +795,117 @@ def calculate_performance_metrics(
         starting_nav=float(starting_nav),
         ending_nav=float(ending_nav),
     )
+
+
+def calculate_period_performance(
+    daily_performance: Sequence[DailyPerformance],
+    *,
+    frequency: str,
+    annualization_sessions: int,
+) -> tuple[PeriodPerformance, ...]:
+    if frequency not in {"year", "month"}:
+        raise ValueError("frequency must be 'year' or 'month'")
+    if (
+        isinstance(annualization_sessions, bool)
+        or not isinstance(annualization_sessions, int)
+        or annualization_sessions < 1
+    ):
+        raise ValueError("annualization_sessions must be a positive integer")
+    rows = tuple(daily_performance)
+    if not rows:
+        return ()
+    dates = tuple(row.trade_date for row in rows)
+    if dates != tuple(sorted(dates)) or len(set(dates)) != len(dates):
+        raise ValueError(
+            "daily_performance trade dates must be strictly ordered and unique"
+        )
+
+    grouped: dict[tuple[int, ...], list[DailyPerformance]] = {}
+    for row in rows:
+        key = (
+            (row.trade_date.year,)
+            if frequency == "year"
+            else (row.trade_date.year, row.trade_date.month)
+        )
+        grouped.setdefault(key, []).append(row)
+
+    results: list[PeriodPerformance] = []
+    for period_rows in grouped.values():
+        strategy_returns = np.asarray(
+            [row.strategy_return for row in period_rows],
+            dtype=float,
+        )
+        spy_returns = np.asarray(
+            [row.spy_return for row in period_rows],
+            dtype=float,
+        )
+        if not bool(np.isfinite(strategy_returns).all()) or not bool(
+            np.isfinite(spy_returns).all()
+        ):
+            raise ValueError("period returns must be finite")
+        strategy_return = _compound_return(strategy_returns)
+        spy_return = _compound_return(spy_returns)
+        strategy_volatility, strategy_sharpe = _annualized_risk_metrics(
+            strategy_returns,
+            annualization_sessions,
+        )
+        spy_volatility, spy_sharpe = _annualized_risk_metrics(
+            spy_returns,
+            annualization_sessions,
+        )
+        results.append(
+            PeriodPerformance(
+                frequency=frequency,
+                period_start=period_rows[0].trade_date,
+                period_end=period_rows[-1].trade_date,
+                session_count=len(period_rows),
+                strategy_return=strategy_return,
+                spy_return=spy_return,
+                excess_return=strategy_return - spy_return,
+                strategy_annualized_volatility=strategy_volatility,
+                spy_annualized_volatility=spy_volatility,
+                strategy_sharpe_ratio=strategy_sharpe,
+                spy_sharpe_ratio=spy_sharpe,
+                strategy_max_drawdown=_max_drawdown(strategy_returns),
+                spy_max_drawdown=_max_drawdown(spy_returns),
+            )
+        )
+    return tuple(results)
+
+
+def _compound_return(returns: np.ndarray) -> float:
+    return float(np.prod(1.0 + returns) - 1.0)
+
+
+def _annualized_risk_metrics(
+    returns: np.ndarray,
+    annualization_sessions: int,
+) -> tuple[float, float | None]:
+    standard_deviation = (
+        float(np.std(returns, ddof=1)) if returns.size > 1 else 0.0
+    )
+    annualized_volatility = float(
+        math.sqrt(annualization_sessions) * standard_deviation
+    )
+    sharpe = (
+        float(
+            math.sqrt(annualization_sessions)
+            * np.mean(returns)
+            / standard_deviation
+        )
+        if standard_deviation > 0.0
+        else None
+    )
+    return annualized_volatility, sharpe
+
+
+def _max_drawdown(returns: np.ndarray) -> float:
+    cumulative_nav = np.concatenate(
+        (np.asarray([1.0]), np.cumprod(1.0 + returns))
+    )
+    running_peak = np.maximum.accumulate(cumulative_nav)
+    drawdowns = cumulative_nav / running_peak - 1.0
+    return float(np.min(drawdowns))
 
 
 def _target_records(

@@ -259,6 +259,23 @@ class PerformanceMetrics:
 
 
 @dataclass(frozen=True)
+class PeriodPerformance:
+    frequency: str
+    period_start: date
+    period_end: date
+    session_count: int
+    strategy_return: float
+    spy_return: float
+    excess_return: float
+    strategy_annualized_volatility: float
+    spy_annualized_volatility: float
+    strategy_sharpe_ratio: float | None
+    spy_sharpe_ratio: float | None
+    strategy_max_drawdown: float
+    spy_max_drawdown: float
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     config: BacktestConfig
     daily_performance: tuple[DailyPerformance, ...]

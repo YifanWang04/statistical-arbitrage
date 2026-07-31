@@ -2,6 +2,7 @@
 
 from .calculations import (
     CALCULATION_VERSION,
+    calculate_period_performance,
     calculate_performance_metrics,
     simulate_backtest,
 )
@@ -20,6 +21,7 @@ from .models import (
     BacktestTarget,
     DailyPerformance,
     MissingDataAudit,
+    PeriodPerformance,
     PerformanceMetrics,
     PositionLotRecord,
     RebalanceEvent,
@@ -38,12 +40,14 @@ __all__ = [
     "BacktestTarget",
     "DailyPerformance",
     "MissingDataAudit",
+    "PeriodPerformance",
     "PerformanceMetrics",
     "PositionLotRecord",
     "RebalanceEvent",
     "TargetWeight",
     "TargetWeightRecord",
     "TradeRecord",
+    "calculate_period_performance",
     "calculate_performance_metrics",
     "export_backtest_report",
     "export_backtest_workbook",
