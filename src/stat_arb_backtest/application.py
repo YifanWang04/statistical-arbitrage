@@ -86,6 +86,7 @@ def target_from_portfolio_weights(
             local_weight=result.local_weights[index],
         )
         for index, ticker in enumerate(result.tickers)
+        if result.portfolio_weights[index] > 0.0
     )
     return BacktestTarget(
         as_of_date=result.as_of_date,

@@ -549,6 +549,16 @@ class DuckDBDataset:
         )
         self._create_browse_views()
 
+    def validate_materialised_universe(self) -> None:
+        row_count = self._connection.execute(
+            "SELECT COUNT(*) FROM market_data.universe_membership"
+        ).fetchone()[0]
+        if int(row_count) == 0:
+            raise RuntimeError(
+                "The materialized universe is empty; "
+                "the data run cannot be completed"
+            )
+
     def _create_browse_views(self) -> None:
         self._connection.execute(
             """

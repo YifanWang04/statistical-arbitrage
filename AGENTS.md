@@ -63,6 +63,7 @@
 - 股票和 SPY 的策略收益均由 Yahoo `Close` 计算，保持拆股尺度一致但不含股息；
 - `adjusted_close`、股息和 `total_return` 只保留用于核对；
 - `ff12_code` 当前为空。
+- 下载完成后若动态股票池为空，则运行必须失败，不能把空数据库标记为 completed 或发布替换已有数据库。
 
 这是近似数据口径，不是严格 CRSP 复刻。当前 Yahoo screener 无法完整发现历史退市证券，因此仍有 survivorship bias；普通股过滤也不等同于 CRSP `SHRCD 10/11`。
 
@@ -160,6 +161,7 @@ portfolio weight = local weight / active cluster count
 - 仍属于新目标的冻结旧腿恢复报价后继续持有；已退出新目标的冻结旧腿恢复后卖成现金，不追补之前未完成的目标；
 - 无交易成本、滑点或融资利息；
 - SPY 使用同区间 Close 收益；风险利率为零；
+- 回测和 grid 的内部 `BacktestTarget` 只携带正权重股票；完整零权重横截面仍保留在单决策日权重结果和 Excel 中；
 - 结果仅在内存中计算并导出 Excel，不新增 DuckDB 回测表。
 
 这是用户确认的日频研究记账规则。论文只说明 `l=3`、`q=5%` 和立即再平衡，没有给出精确成交时点，因此不得把上述事件边界称为论文唯一口径。
@@ -175,6 +177,7 @@ portfolio weight = local weight / active cluster count
 - `stat_arb_stock_selection`：winner/loser/neutral；
 - `stat_arb_portfolio_weights`：单日只做多权重；
 - `stat_arb_backtest`：跨日持仓状态、事件再平衡、绩效与 Excel 审计；
+- `stat_arb_excel`：所有阶段共用的 Excel 临时保存、原子替换和失败清理；
 - `scripts/`：适合 IDE 直接运行的入口；
 - `tests/`：离线单元与集成测试。
 
@@ -225,6 +228,7 @@ DuckDB 持久化：
 - 所有输入矩阵必须校验标签、形状、排序、有限值及时间窗口；
 - 随机过程必须显式记录 seed 和关键库参数；
 - 数据库发布、缓存替换和文件覆盖应保持失败安全；
+- 所有 Excel 报告只在临时文件保存完整成功后原子替换目标；保存失败不得修改已有文件；
 - 不使用未来数据填补过去，不静默改变缺失值规则；
 - 不能只根据最终收益判断复刻正确性，应先核对股票池、窗口、beta、残差、相关矩阵、K、clusters、信号和权重；
 - notebook 可用于研究，但不能成为生产逻辑的唯一来源；
@@ -235,7 +239,7 @@ DuckDB 持久化：
   .\.venv\Scripts\python.exe -m unittest discover -s tests -v
   ```
 
-截至 2026-07-31，测试套件共有 106 项，全部通过。
+截至 2026-07-31，测试套件共有 110 项，全部通过。
 
 ## 7. 后续阶段的待确认清单
 

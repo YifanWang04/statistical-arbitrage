@@ -96,6 +96,20 @@ class FakeSource:
         }
 
 
+class FailedStockDownloadsSource(FakeSource):
+    def download_prices(
+        self, tickers: list[str], start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        if tickers == ["SPY"]:
+            return super().download_prices(tickers, start_date, end_date)
+        raise RuntimeError("all stock price downloads failed")
+
+    def download_shares(
+        self, ticker: str, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        raise RuntimeError("all historical share downloads failed")
+
+
 class DataPipelineTests(unittest.TestCase):
     def test_offline_pipeline_builds_browsable_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -141,6 +155,31 @@ class DataPipelineTests(unittest.TestCase):
                 return_basis,
                 ("split_consistent_close_price_return_excluding_dividends",),
             )
+
+    def test_pipeline_fails_when_downloads_produce_an_empty_universe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "empty_universe.duckdb"
+            config = PipelineConfig(
+                database_path=database,
+                start_date=date(2020, 1, 1),
+                end_date=date(2020, 1, 6),
+                top_n=1,
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "materialized universe is empty",
+            ):
+                DataPipeline(
+                    config,
+                    source=FailedStockDownloadsSource(),
+                ).run()
+
+            with duckdb.connect(str(database), read_only=True) as connection:
+                status = connection.execute(
+                    "SELECT status FROM audit.pipeline_runs"
+                ).fetchone()
+            self.assertEqual(status, ("failed",))
 
 
 if __name__ == "__main__":

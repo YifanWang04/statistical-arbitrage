@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import duckdb
 import numpy as np
@@ -286,6 +287,34 @@ class ClusterCountIntegrationTests(unittest.TestCase):
 
             with self.assertRaises(FileExistsError):
                 export_cluster_count_workbook(result, output)
+
+    def test_excel_save_failure_preserves_existing_output(self) -> None:
+        result = calculate_cluster_count(
+            make_snapshot(np.eye(3)),
+            0.80,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "cluster_count.xlsx"
+            original = b"existing valid workbook"
+            output.write_bytes(original)
+
+            def fail_after_partial_write(path: Path) -> None:
+                Path(path).write_bytes(b"partial workbook")
+                raise RuntimeError("save failed")
+
+            with patch(
+                "openpyxl.workbook.workbook.Workbook.save",
+                side_effect=fail_after_partial_write,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "save failed"):
+                    export_cluster_count_workbook(
+                        result,
+                        output,
+                        replace_existing=True,
+                    )
+
+            self.assertEqual(output.read_bytes(), original)
+            self.assertEqual(list(Path(directory).iterdir()), [output])
 
 
 def make_snapshot(correlation: np.ndarray) -> PreprocessingSnapshot:

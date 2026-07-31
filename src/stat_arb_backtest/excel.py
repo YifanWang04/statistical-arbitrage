@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-import os
 from pathlib import Path
-import tempfile
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .calculations import calculate_period_performance
 from .models import (
@@ -61,48 +60,28 @@ def export_backtest_workbook(
     *,
     replace_existing: bool = False,
 ) -> Path:
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. Use --replace to overwrite it."
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        summary = workbook.create_sheet("Summary")
+        periods = workbook.create_sheet("Period_Performance")
+        daily = workbook.create_sheet("Daily_Performance")
+        events = workbook.create_sheet("Rebalance_Events")
+        actions = workbook.create_sheet("Portfolio_Actions")
+        lots = workbook.create_sheet("Position_Lots")
+        missing = workbook.create_sheet("Missing_Data_Audit")
 
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    summary = workbook.create_sheet("Summary")
-    periods = workbook.create_sheet("Period_Performance")
-    daily = workbook.create_sheet("Daily_Performance")
-    events = workbook.create_sheet("Rebalance_Events")
-    actions = workbook.create_sheet("Portfolio_Actions")
-    lots = workbook.create_sheet("Position_Lots")
-    missing = workbook.create_sheet("Missing_Data_Audit")
-
-    _write_summary(summary, result)
-    _write_period_performance(periods, result)
-    _write_daily_performance(daily, result)
-    _write_rebalance_events(events, result)
-    _write_portfolio_actions(actions, result)
-    _write_position_lots(lots, result)
-    _write_missing_data(missing, result)
-    if not result.missing_data_audit:
-        missing.sheet_state = "hidden"
-
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=output.parent,
-            prefix=f".{output.stem}.",
-            suffix=".xlsx",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-        workbook.save(temporary_path)
-        os.replace(temporary_path, output)
-    finally:
-        workbook.close()
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
+        _write_summary(summary, result)
+        _write_period_performance(periods, result)
+        _write_daily_performance(daily, result)
+        _write_rebalance_events(events, result)
+        _write_portfolio_actions(actions, result)
+        _write_position_lots(lots, result)
+        _write_missing_data(missing, result)
+        if not result.missing_data_audit:
+            missing.sheet_state = "hidden"
     return output
 
 

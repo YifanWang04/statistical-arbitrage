@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .models import StockSelectionResult
 
@@ -34,28 +35,22 @@ def export_stock_selection_workbook(
     *,
     replace_existing: bool = False,
 ) -> Path:
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. Use --replace to overwrite it."
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        summary = workbook.create_sheet("Summary")
+        raw_returns = workbook.create_sheet("Raw_Returns")
+        cluster_means = workbook.create_sheet("Cluster_Mean_Returns")
+        deviations = workbook.create_sheet("Daily_Deviations")
+        signals = workbook.create_sheet("Trade_Signals")
 
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    summary = workbook.create_sheet("Summary")
-    raw_returns = workbook.create_sheet("Raw_Returns")
-    cluster_means = workbook.create_sheet("Cluster_Mean_Returns")
-    deviations = workbook.create_sheet("Daily_Deviations")
-    signals = workbook.create_sheet("Trade_Signals")
-
-    _write_summary(summary, result)
-    _write_raw_returns(raw_returns, result)
-    _write_cluster_means(cluster_means, result)
-    _write_deviations(deviations, result)
-    _write_signals(signals, result)
-
-    workbook.save(output)
+        _write_summary(summary, result)
+        _write_raw_returns(raw_returns, result)
+        _write_cluster_means(cluster_means, result)
+        _write_deviations(deviations, result)
+        _write_signals(signals, result)
     return output
 
 

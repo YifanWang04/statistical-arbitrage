@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .models import PortfolioWeightResult
 
@@ -39,24 +40,18 @@ def export_portfolio_weight_workbook(
     replace_existing: bool = False,
 ) -> Path:
     """Export a concise result workbook without duplicating audit calculations."""
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. Use --replace to overwrite it."
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        summary = workbook.create_sheet("Summary")
+        clusters = workbook.create_sheet("Cluster_Allocations")
+        stocks = workbook.create_sheet("Stock_Weights")
 
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    summary = workbook.create_sheet("Summary")
-    clusters = workbook.create_sheet("Cluster_Allocations")
-    stocks = workbook.create_sheet("Stock_Weights")
-
-    _write_summary(summary, result)
-    _write_cluster_allocations(clusters, result)
-    _write_stock_weights(stocks, result)
-
-    workbook.save(output)
+        _write_summary(summary, result)
+        _write_cluster_allocations(clusters, result)
+        _write_stock_weights(stocks, result)
     return output
 
 

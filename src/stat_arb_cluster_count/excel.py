@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .models import ClusterCountResult
 
@@ -33,22 +34,16 @@ def export_cluster_count_workbook(
     *,
     replace_existing: bool = False,
 ) -> Path:
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. Use --replace to overwrite it."
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        summary = workbook.create_sheet("Summary")
+        eigenvalues = workbook.create_sheet("Eigenvalues")
 
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    summary = workbook.create_sheet("Summary")
-    eigenvalues = workbook.create_sheet("Eigenvalues")
-
-    _write_summary(summary, result)
-    _write_eigenvalues(eigenvalues, result)
-
-    workbook.save(output)
+        _write_summary(summary, result)
+        _write_eigenvalues(eigenvalues, result)
     return output
 
 

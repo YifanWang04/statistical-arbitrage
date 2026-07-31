@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .models import PreprocessingSnapshot
 
@@ -27,40 +28,34 @@ def export_snapshot_workbook(
     *,
     replace_existing: bool = False,
 ) -> Path:
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. Use --replace to overwrite it."
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        parameters = workbook.create_sheet("Summary")
+        beta = workbook.create_sheet("Beta_Used")
+        returns = workbook.create_sheet("Stock_Returns")
+        residual = workbook.create_sheet("Residual_Matrix")
+        correlation = workbook.create_sheet("Correlation_Matrix")
+        excluded = workbook.create_sheet("Excluded_Stocks")
+
+        _write_parameters(parameters, snapshot)
+        _write_wide_matrix(
+            beta,
+            snapshot.beta_matrix,
+            "Trade Date",
+            number_format="0.0000",
         )
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    parameters = workbook.create_sheet("Summary")
-    beta = workbook.create_sheet("Beta_Used")
-    returns = workbook.create_sheet("Stock_Returns")
-    residual = workbook.create_sheet("Residual_Matrix")
-    correlation = workbook.create_sheet("Correlation_Matrix")
-    excluded = workbook.create_sheet("Excluded_Stocks")
-
-    _write_parameters(parameters, snapshot)
-    _write_wide_matrix(
-        beta,
-        snapshot.beta_matrix,
-        "Trade Date",
-        number_format="0.0000",
-    )
-    _write_stock_returns(returns, snapshot)
-    _write_wide_matrix(
-        residual,
-        snapshot.residual_matrix,
-        "Trade Date",
-        number_format="0.0000%",
-    )
-    _write_correlation(correlation, snapshot)
-    _write_exclusions(excluded, snapshot)
-
-    workbook.save(output)
+        _write_stock_returns(returns, snapshot)
+        _write_wide_matrix(
+            residual,
+            snapshot.residual_matrix,
+            "Trade Date",
+            number_format="0.0000%",
+        )
+        _write_correlation(correlation, snapshot)
+        _write_exclusions(excluded, snapshot)
     return output
 
 

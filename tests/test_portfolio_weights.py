@@ -10,6 +10,7 @@ import numpy as np
 from openpyxl import load_workbook
 import pandas as pd
 
+from stat_arb_backtest import target_from_portfolio_weights
 from stat_arb_clustering import cluster_sponge_sym
 from stat_arb_portfolio_weights import (
     assign_portfolio_weights,
@@ -165,6 +166,29 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
         self.assertAlmostEqual(result.quality.net_exposure, 1.0)
         self.assertAlmostEqual(result.quality.gross_exposure, 1.0)
         self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.0)
+
+    def test_backtest_target_contains_only_positive_portfolio_weights(self) -> None:
+        selection = make_selection(
+            labels=(0, 0, 1, 1),
+            classifications=(
+                PREVIOUS_WINNER,
+                PREVIOUS_LOSER,
+                NEUTRAL,
+                PREVIOUS_LOSER,
+            ),
+        )
+        result = assign_portfolio_weights(selection)
+
+        target = target_from_portfolio_weights(result)
+
+        self.assertEqual(
+            tuple(weight.ticker for weight in target.weights),
+            (result.tickers[1], result.tickers[3]),
+        )
+        self.assertTrue(
+            all(weight.portfolio_weight > 0.0 for weight in target.weights)
+        )
+        self.assertAlmostEqual(target.target_gross_exposure, 1.0)
 
     def test_rejects_malformed_stock_selection_results(self) -> None:
         selection = make_selection(

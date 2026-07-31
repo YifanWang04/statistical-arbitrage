@@ -3,14 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
-import os
-import tempfile
 
-from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
+
+from stat_arb_excel import workbook_for_publication
 
 from .models import GridBacktestResult, GridRunMetrics, GridRunResult
 
@@ -509,39 +508,18 @@ def export_grid_backtest_workbook(
     *,
     replace_existing: bool = False,
 ) -> Path:
-    output = Path(output_path).resolve()
-    if output.exists() and not replace_existing:
-        raise FileExistsError(
-            f"Excel output already exists: {output}. "
-            "Use --replace to overwrite it."
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
+    with workbook_for_publication(
+        output_path,
+        replace_existing=replace_existing,
+    ) as (workbook, output):
+        workbook.remove(workbook.active)
+        summary = workbook.create_sheet("Summary")
+        results = workbook.create_sheet("Grid_Results")
+        audit = workbook.create_sheet("Audit")
 
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    summary = workbook.create_sheet("Summary")
-    results = workbook.create_sheet("Grid_Results")
-    audit = workbook.create_sheet("Audit")
-
-    _write_summary(summary, result)
-    _write_grid_results(results, result)
-    _write_audit(audit, result)
-
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=output.parent,
-            prefix=f".{output.stem}.",
-            suffix=".xlsx",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-        workbook.save(temporary_path)
-        os.replace(temporary_path, output)
-    finally:
-        workbook.close()
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
+        _write_summary(summary, result)
+        _write_grid_results(results, result)
+        _write_audit(audit, result)
     return output
 
 

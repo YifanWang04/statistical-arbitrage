@@ -89,6 +89,7 @@ class DataPipeline:
                         LOGGER.info("Historical shares: %s/%s candidates processed", index, len(tickers))
 
                 dataset.materialise_universe(self.config.top_n)
+                dataset.validate_materialised_universe()
                 dataset.complete_run(run_id)
             except Exception as exc:
                 dataset.fail_run(run_id, exc)
