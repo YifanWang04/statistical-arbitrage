@@ -245,10 +245,10 @@ Excel 工作表：
 ```text
 loser local weight = 1 / loser count in cluster
 winner and neutral local weight = 0
-portfolio weight = local weight / K
+portfolio weight = local weight / active cluster count
 ```
 
-每个 cluster 的目标额度为 `1/K`。没有 loser 的 cluster 为 inactive，其额度保留为未投资现金，不分配给其他 clusters。因此组合实际总权重可能小于 1。
+有至少一个 loser 的 cluster 为 active。全部资本在 active clusters 之间等分，每个 active cluster 的目标额度为 `1 / active cluster count`；没有 loser 的 inactive cluster 权重为零，不占用资本。因此，只要至少存在一个 active cluster，组合目标总权重为 1；若没有任何 active cluster，则组合保持全现金。
 
 Excel 工作表：
 
@@ -284,7 +284,7 @@ CLI 与 `scripts/export_backtest.py` 默认显示 `tqdm` 交易日进度、运�
 - 第 1 或第 2 日的本轮复利净值收益达到 `5%` 时提前换仓；
 - 事件日收益归旧组合，新组合从下一 SPY 交易日起获得收益；
 - 第 3 日同时达到止盈阈值时仍记录为定期换仓；
-- inactive cluster 和未成交额度保留为零收益现金。
+- inactive cluster 不占用目标额度，资本平均分配给 active clusters；仅无 active cluster 或未成交额度保留为零收益现金。
 
 缺少有效 Close 时，持仓按上一有效 Close 估值并冻结。事件日的冻结腿不参与新目标资本；可交易部分先换仓且不使用杠杆。仍属于新目标的冻结腿恢复后继续持有；已退出新目标的冻结腿恢复后卖为现金，不追补之前未完成的目标仓位。所有缺价、冻结、恢复和未成交行为写入审计表。
 
@@ -400,7 +400,7 @@ Excel 默认采用结论优先的精简视图：`Summary` 集中展示运行概�
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-28，共 105 项测试，全部通过。测试覆盖：
+截至 2026-07-31，共 106 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -409,7 +409,7 @@ Excel 默认采用结论优先的精简视图：`Summary` 集中展示运行概�
 - 动态 K 的阈值与数值边界；
 - `SPONGE_sym` embedding、可复现性和求解失败；
 - winner/loser 严格阈值；
-- 只做多权重、inactive cluster 现金保留；
+- 只做多权重、全部资本在 active clusters 间等分、无 active cluster 时全现金；
 - 固定份额漂移、`l=3`、`q=5%`、事件日收益归属和计数重置；
 - 缺价冻结、部分换仓、目标内恢复持有、目标外恢复清算、SPY 对齐和绩效公式；
 - 回测全链路只读 DuckDB 边界；

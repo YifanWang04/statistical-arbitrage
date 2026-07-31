@@ -289,7 +289,8 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
         (
             "Strategy scope",
             "Yahoo Close price return; p=5%; long-only losers; "
-            "inactive clusters remain cash; cash return and risk-free rate are zero",
+            "capital is split equally across active clusters; "
+            "cash return and risk-free rate are zero",
         ),
         ("Calculation version", result.calculation_version),
         ("FF12 benchmark", "not produced because ff12_code is currently empty"),

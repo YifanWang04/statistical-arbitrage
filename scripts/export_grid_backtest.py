@@ -18,13 +18,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
 
 # The start and end dates are included SPY return dates.
-START_DATE = date(2024, 1, 1)
+START_DATE = date(2023, 1, 1)
 END_DATE = date(2026, 7, 27)
-LOOKBACK_WINDOWS = (5, 10, 20)
-DEVIATION_THRESHOLDS = (0.1, 0.05) ## deviation > p  → winner; deviation < -p → loser
+LOOKBACK_WINDOWS = (5, 10, 20, 30)
+DEVIATION_THRESHOLDS = (0.1, 0.05, 0.03) ## deviation > p  → winner; deviation < -p → loser
 VARIANCE_THRESHOLDS = (0.90,) ## 元组，即使一个元素，也需要保留逗号
 REBALANCE_PERIODS = (3, 5, 10)
-TAKE_PROFIT_THRESHOLDS = (0.03, 0.05)
+TAKE_PROFIT_THRESHOLDS = (0.015, 0.03, 0.05, 0.1)
 
 INITIAL_NAV = 1.0
 ANNUALIZATION_SESSIONS = 252

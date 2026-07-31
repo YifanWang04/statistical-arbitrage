@@ -95,10 +95,13 @@ def _write_summary(sheet: Worksheet, result: PortfolioWeightResult) -> None:
         ("Method", None),
         ("Return input", "raw stock price returns"),
         ("Position direction", "long only: previous losers; winners stay at zero"),
-        ("Cluster allocation", "equal 1/K share of total gross exposure"),
+        (
+            "Cluster allocation",
+            "equal 1/A share across A active clusters",
+        ),
         (
             "Inactive cluster",
-            "zero weights; its gross allocation remains uninvested",
+            "zero weights; capital is redistributed to active clusters",
         ),
         (None, None),
         ("Calculation versions", None),
@@ -263,7 +266,9 @@ def _write_stock_weights(
 
 def _overall_qc_status(result: PortfolioWeightResult) -> str:
     quality = result.quality
-    expected_invested_gross = quality.active_cluster_count / result.cluster_count
+    expected_invested_gross = (
+        1.0 if quality.active_cluster_count > 0 else 0.0
+    )
     checks = (
         quality.all_weights_finite,
         quality.maximum_active_cluster_local_net_error < QC_TOLERANCE,
@@ -276,6 +281,14 @@ def _overall_qc_status(result: PortfolioWeightResult) -> str:
             quality.gross_exposure
             + quality.uninvested_gross_exposure
             - 1.0
+        )
+        < QC_TOLERANCE,
+        abs(
+            sum(
+                allocation.uninvested_gross_exposure
+                for allocation in result.cluster_allocations
+            )
+            - quality.uninvested_gross_exposure
         )
         < QC_TOLERANCE,
     )

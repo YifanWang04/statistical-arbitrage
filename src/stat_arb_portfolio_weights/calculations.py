@@ -16,7 +16,7 @@ from .models import (
 )
 
 
-CALCULATION_VERSION = "long_only_equal_cluster_gross_weight_v2"
+CALCULATION_VERSION = "long_only_equal_active_cluster_full_investment_v3"
 
 
 def assign_portfolio_weights(
@@ -24,27 +24,43 @@ def assign_portfolio_weights(
 ) -> PortfolioWeightResult:
     labels, classifications = _validated_inputs(selection_result)
     cluster_count = selection_result.clustering_result.requested_cluster_count
-    target_cluster_gross = 1.0 / cluster_count
-    portfolio_scale = 1.0 / cluster_count
+    loser_counts = tuple(
+        int(
+            (
+                (labels == cluster_id)
+                & (classifications == PREVIOUS_LOSER)
+            ).sum()
+        )
+        for cluster_id in range(cluster_count)
+    )
+    active_count = sum(loser_count > 0 for loser_count in loser_counts)
+    active_cluster_gross = 1.0 / active_count if active_count > 0 else 0.0
 
     local_weights = np.zeros(selection_result.stock_count, dtype=float)
-    allocations: list[ClusterAllocation] = []
+    for cluster_id in range(cluster_count):
+        loser_count = loser_counts[cluster_id]
+        if loser_count == 0:
+            continue
+        loser_mask = (labels == cluster_id) & (
+            classifications == PREVIOUS_LOSER
+        )
+        local_weights[loser_mask] = 1.0 / loser_count
 
+    portfolio_weights = local_weights * active_cluster_gross
+    allocations: list[ClusterAllocation] = []
     for cluster_id in range(cluster_count):
         cluster_mask = labels == cluster_id
-        winner_mask = cluster_mask & (classifications == PREVIOUS_WINNER)
-        loser_mask = cluster_mask & (classifications == PREVIOUS_LOSER)
+        winner_mask = cluster_mask & (
+            classifications == PREVIOUS_WINNER
+        )
         neutral_mask = cluster_mask & (classifications == NEUTRAL)
         winner_count = int(winner_mask.sum())
-        loser_count = int(loser_mask.sum())
+        loser_count = loser_counts[cluster_id]
         neutral_count = int(neutral_mask.sum())
         is_active = loser_count > 0
 
-        if is_active:
-            local_weights[loser_mask] = 1.0 / loser_count
-
         cluster_local = local_weights[cluster_mask]
-        cluster_portfolio = cluster_local * portfolio_scale
+        cluster_portfolio = portfolio_weights[cluster_mask]
         allocations.append(
             ClusterAllocation(
                 cluster_id=cluster_id,
@@ -53,7 +69,9 @@ def assign_portfolio_weights(
                 loser_count=loser_count,
                 neutral_count=neutral_count,
                 is_active=is_active,
-                target_gross_exposure=target_cluster_gross,
+                target_gross_exposure=(
+                    active_cluster_gross if is_active else 0.0
+                ),
                 local_long_exposure=float(cluster_local[cluster_local > 0].sum()),
                 local_short_exposure=float(
                     cluster_local[cluster_local < 0].sum()
@@ -71,17 +89,15 @@ def assign_portfolio_weights(
                     np.abs(cluster_portfolio).sum()
                 ),
                 uninvested_gross_exposure=(
-                    0.0 if is_active else target_cluster_gross
+                    1.0 / cluster_count if active_count == 0 else 0.0
                 ),
             )
         )
 
-    portfolio_weights = local_weights * portfolio_scale
     active_allocations = tuple(
         allocation for allocation in allocations if allocation.is_active
     )
-    active_count = len(active_allocations)
-    expected_invested_gross = active_count / cluster_count
+    expected_invested_gross = 1.0 if active_count > 0 else 0.0
     gross_exposure = float(np.abs(portfolio_weights).sum())
     quality = PortfolioWeightQuality(
         active_cluster_count=active_count,
@@ -109,11 +125,7 @@ def assign_portfolio_weights(
             (
                 abs(
                     allocation.portfolio_gross_exposure
-                    - (
-                        allocation.target_gross_exposure
-                        if allocation.is_active
-                        else 0.0
-                    )
+                    - allocation.target_gross_exposure
                 )
                 for allocation in allocations
             ),

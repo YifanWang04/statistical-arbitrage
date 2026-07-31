@@ -1,6 +1,6 @@
 # 统计套利论文复刻项目：AI 协作规范
 
-最后更新：2026-07-27  
+最后更新：2026-07-31
 适用范围：本目录及所有子目录
 
 ## 1. 项目目标与当前状态
@@ -132,14 +132,15 @@ neutral: -p <= deviation(i) <= p
 ```text
 loser local weight = 1 / cluster loser count
 winner and neutral local weight = 0
-portfolio weight = local weight / K
+portfolio weight = local weight / active cluster count
 ```
 
 - 有至少一个 loser 的 cluster 为 active；
 - 没有 loser 的 cluster 为 inactive；
-- 每个 cluster 的目标额度固定为 `1/K`；
-- inactive cluster 的额度保留为未投资现金，不重新分配；
-- 因此实际组合总权重可能小于 1。
+- 全部资本在 active clusters 之间平均分配；
+- 每个 active cluster 的目标额度为 `1 / active cluster count`；
+- inactive cluster 权重为零，不占用目标额度；
+- 只要至少存在一个 active cluster，组合目标总权重为 1；若没有任何 active cluster，则组合保持全现金。
 
 不得把该只做多结果描述为论文的市场中性组合。
 
@@ -154,7 +155,7 @@ portfolio weight = local weight / K
 - 第 3 日同时达到阈值时按定期换仓记录；
 - 事件日收益归旧组合，新目标使用下一 SPY 交易日为 `as_of_date`，并从下一交易日起获得收益；
 - 提前换仓后重新开始 3 日计数；
-- inactive cluster 和未使用资本为零收益现金；
+- inactive cluster 不占用目标额度；仅无 active cluster 或因缺价未成交的资本为零收益现金；
 - 缺价持仓按上一有效 Close 估值并冻结；换仓时只用扣除冻结价值后的可用资本，禁止杠杆；
 - 仍属于新目标的冻结旧腿恢复报价后继续持有；已退出新目标的冻结旧腿恢复后卖成现金，不追补之前未完成的目标；
 - 无交易成本、滑点或融资利息；
@@ -234,7 +235,7 @@ DuckDB 持久化：
   .\.venv\Scripts\python.exe -m unittest discover -s tests -v
   ```
 
-截至 2026-07-27，测试套件共有 85 项，全部通过。
+截至 2026-07-31，测试套件共有 106 项，全部通过。
 
 ## 7. 后续阶段的待确认清单
 

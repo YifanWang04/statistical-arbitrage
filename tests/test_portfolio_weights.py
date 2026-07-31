@@ -70,7 +70,9 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
             self.assertAlmostEqual(allocation.local_gross_exposure, 1.0)
             self.assertAlmostEqual(allocation.portfolio_gross_exposure, 0.5)
 
-    def test_inactive_cluster_stays_uninvested_without_redistribution(self) -> None:
+    def test_inactive_cluster_capital_is_redistributed_to_active_clusters(
+        self,
+    ) -> None:
         selection = make_selection(
             labels=(0, 0, 1),
             classifications=(PREVIOUS_WINNER, PREVIOUS_LOSER, NEUTRAL),
@@ -81,15 +83,51 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
         np.testing.assert_allclose(result.local_weights, (0.0, 1.0, 0.0))
         np.testing.assert_allclose(
             result.portfolio_weights,
-            (0.0, 0.5, 0.0),
+            (0.0, 1.0, 0.0),
         )
         self.assertTrue(result.cluster_allocations[0].is_active)
         self.assertFalse(result.cluster_allocations[1].is_active)
-        self.assertAlmostEqual(result.quality.gross_exposure, 0.5)
-        self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.5)
+        self.assertAlmostEqual(result.quality.gross_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.0)
+        self.assertAlmostEqual(
+            result.cluster_allocations[0].target_gross_exposure,
+            1.0,
+        )
         self.assertAlmostEqual(
             result.cluster_allocations[1].uninvested_gross_exposure,
-            0.5,
+            0.0,
+        )
+
+    def test_multiple_active_clusters_split_all_capital_equally(self) -> None:
+        selection = make_selection(
+            labels=(0, 0, 1, 1, 2, 2, 2),
+            classifications=(
+                PREVIOUS_LOSER,
+                PREVIOUS_WINNER,
+                NEUTRAL,
+                PREVIOUS_WINNER,
+                PREVIOUS_LOSER,
+                PREVIOUS_LOSER,
+                NEUTRAL,
+            ),
+        )
+
+        result = assign_portfolio_weights(selection)
+
+        np.testing.assert_allclose(
+            result.portfolio_weights,
+            (0.5, 0.0, 0.0, 0.0, 0.25, 0.25, 0.0),
+        )
+        self.assertEqual(result.quality.active_cluster_count, 2)
+        self.assertEqual(result.quality.inactive_cluster_count, 1)
+        self.assertAlmostEqual(result.quality.gross_exposure, 1.0)
+        self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 0.0)
+        np.testing.assert_allclose(
+            [
+                allocation.target_gross_exposure
+                for allocation in result.cluster_allocations
+            ],
+            (0.5, 0.0, 0.5),
         )
 
     def test_winner_only_cluster_is_inactive(self) -> None:
@@ -105,6 +143,10 @@ class PortfolioWeightCalculationTests(unittest.TestCase):
         self.assertEqual(result.quality.active_cluster_count, 0)
         self.assertEqual(result.quality.inactive_cluster_count, 1)
         self.assertAlmostEqual(result.quality.uninvested_gross_exposure, 1.0)
+        self.assertAlmostEqual(
+            result.cluster_allocations[0].uninvested_gross_exposure,
+            1.0,
+        )
 
     def test_loser_only_cluster_is_active(self) -> None:
         selection = make_selection(
@@ -269,7 +311,7 @@ class PortfolioWeightIntegrationTests(unittest.TestCase):
                     summary_rows["Cluster allocation"],
                     2,
                 ).value,
-                "equal 1/K share of total gross exposure",
+                "equal 1/A share across A active clusters",
             )
             self.assertEqual(
                 summary.cell(
