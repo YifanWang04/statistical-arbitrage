@@ -16,7 +16,7 @@ from stat_arb_preprocessing import (
 from stat_arb_preprocessing.config import DEFAULT_DATABASE
 
 from .application import export_clustering_report
-from .models import SpongeSymConfig
+from .models import SUPPORTED_EMBEDDING_MODES, SpongeSymConfig
 
 
 def _date(value: str) -> date:
@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="stat-arb-clustering",
         description=(
             "Cluster one as-of-date stock universe with the SPONGE_sym "
-            "SigNet-compatible embedding."
+            "paper-text embedding."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_VARIANCE_THRESHOLD,
     )
+    export.add_argument(
+        "--embedding-mode",
+        choices=SUPPORTED_EMBEDDING_MODES,
+        default=SUPPORTED_EMBEDDING_MODES[0],
+    )
     export.add_argument("--tau-positive", type=float, default=1.0)
     export.add_argument("--tau-negative", type=float, default=1.0)
     export.add_argument("--seed", type=int, default=0)
@@ -77,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             tau_negative=args.tau_negative,
             random_seed=args.seed,
             kmeans_n_init=args.n_init,
+            embedding_mode=args.embedding_mode,
         )
         output = args.output or Path(
             "outputs/step4_clustering/"

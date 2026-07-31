@@ -13,6 +13,8 @@ import pandas as pd
 
 from stat_arb_clustering import (
     CALCULATION_VERSION,
+    SIGNET_COMPAT_CALCULATION_VERSION,
+    SIGNET_COMPAT_EMBEDDING,
     SpongeSymConfig,
     cluster_sponge_sym,
     cluster_stocks_for_date,
@@ -34,7 +36,7 @@ class SpongeSymCalculationTests(unittest.TestCase):
 
         np.testing.assert_allclose(first.positive_degrees, np.full(6, 1.6))
         np.testing.assert_allclose(first.negative_degrees, np.full(6, 1.2))
-        self.assertEqual(first.embedding.shape, (6, 1))
+        self.assertEqual(first.embedding.shape, (6, 2))
         self.assertEqual(first.generalized_eigenvalues, second.generalized_eigenvalues)
         self.assertEqual(first.cluster_labels, second.cluster_labels)
         self.assertEqual(sorted(first.cluster_sizes), [3, 3])
@@ -45,7 +47,7 @@ class SpongeSymCalculationTests(unittest.TestCase):
             1e-10,
         )
 
-    def test_embedding_is_eigenvector_scaled_by_inverse_eigenvalue(self) -> None:
+    def test_paper_embedding_uses_k_raw_generalized_eigenvectors(self) -> None:
         snapshot = make_snapshot(signed_block_correlation())
         result = cluster_sponge_sym(snapshot, 2)
         adjacency = snapshot.correlation_matrix.to_numpy(copy=True)
@@ -62,20 +64,31 @@ class SpongeSymCalculationTests(unittest.TestCase):
         )
         numerator = positive_laplacian + np.eye(6)
         denominator = negative_laplacian + np.eye(6)
+        self.assertEqual(result.embedding.shape, (6, 2))
+        np.testing.assert_array_equal(result.embedding_weights, np.ones(2))
+        for index, eigenvalue in enumerate(result.generalized_eigenvalues):
+            raw_eigenvector = result.embedding.iloc[:, index].to_numpy()
+            residual = (
+                numerator @ raw_eigenvector
+                - eigenvalue * (denominator @ raw_eigenvector)
+            )
+            self.assertLess(float(np.linalg.norm(residual)), 1e-10)
+
+    def test_explicit_signet_compat_mode_retains_k_minus_one_scaling(self) -> None:
+        snapshot = make_snapshot(signed_block_correlation())
+        result = cluster_sponge_sym(
+            snapshot,
+            2,
+            SpongeSymConfig(embedding_mode=SIGNET_COMPAT_EMBEDDING),
+        )
+
+        self.assertEqual(result.embedding.shape, (6, 1))
+        self.assertEqual(
+            result.calculation_version,
+            SIGNET_COMPAT_CALCULATION_VERSION,
+        )
         eigenvalue = result.generalized_eigenvalues[0]
-        scaled = result.embedding.iloc[:, 0].to_numpy()
-        raw_eigenvector = scaled * eigenvalue
-
-        residual = (
-            numerator @ raw_eigenvector
-            - eigenvalue * (denominator @ raw_eigenvector)
-        )
-
-        self.assertAlmostEqual(
-            result.inverse_eigenvalue_weights[0],
-            1.0 / eigenvalue,
-        )
-        self.assertLess(float(np.linalg.norm(residual)), 1e-10)
+        self.assertAlmostEqual(result.embedding_weights[0], 1.0 / eigenvalue)
 
     def test_signet_zero_degree_convention_returns_identity_laplacian(self) -> None:
         adjacency = np.zeros((3, 3), dtype=float)
@@ -87,19 +100,19 @@ class SpongeSymCalculationTests(unittest.TestCase):
 
         np.testing.assert_array_equal(laplacian, np.eye(3))
 
-    def test_k_one_assigns_every_stock_without_eigenvectors(self) -> None:
+    def test_k_one_assigns_every_stock_with_one_paper_eigenvector(self) -> None:
         result = cluster_sponge_sym(make_snapshot(np.eye(4)), 1)
 
         self.assertEqual(result.cluster_labels, (0, 0, 0, 0))
         self.assertEqual(result.cluster_sizes, (4,))
-        self.assertEqual(result.embedding.shape, (4, 0))
-        self.assertEqual(result.generalized_eigenvalues, ())
-        self.assertEqual(result.quality.kmeans_iterations, 0)
+        self.assertEqual(result.embedding.shape, (4, 1))
+        self.assertEqual(len(result.generalized_eigenvalues), 1)
+        self.assertGreater(result.quality.kmeans_iterations, 0)
 
     def test_k_equal_to_stock_count_uses_dense_edge_case(self) -> None:
         result = cluster_sponge_sym(make_snapshot(np.eye(4)), 4)
 
-        self.assertEqual(result.embedding.shape, (4, 3))
+        self.assertEqual(result.embedding.shape, (4, 4))
         self.assertEqual(result.quality.nonempty_cluster_count, 4)
         self.assertEqual(result.cluster_sizes, (1, 1, 1, 1))
 
@@ -130,6 +143,7 @@ class SpongeSymCalculationTests(unittest.TestCase):
             ({"random_seed": 2**32}, "random_seed"),
             ({"kmeans_n_init": 0}, "kmeans_n_init"),
             ({"kmeans_max_iter": 0}, "kmeans_max_iter"),
+            ({"embedding_mode": "unknown"}, "embedding_mode"),
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaisesRegex(ValueError, message):
@@ -222,7 +236,7 @@ class SpongeSymIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 result.embedding_dimension,
-                max(result.requested_cluster_count - 1, 0),
+                result.requested_cluster_count,
             )
             self.assertEqual(sum(result.cluster_sizes), result.stock_count)
 
@@ -272,6 +286,10 @@ class SpongeSymIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 parameters.cell(parameter_rows["KMeans n_init"], 2).value,
                 10,
+            )
+            self.assertEqual(
+                parameters.cell(parameter_rows["Embedding mode"], 2).value,
+                "paper_text",
             )
             self.assertEqual(
                 parameters.cell(parameter_rows["Clustering version"], 2).value,

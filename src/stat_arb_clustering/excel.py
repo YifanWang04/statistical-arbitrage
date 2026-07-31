@@ -8,7 +8,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from stat_arb_excel import workbook_for_publication
 
-from .models import SpongeSymResult
+from .models import PAPER_TEXT_EMBEDDING, SpongeSymResult
 
 
 NAVY = "1F4E78"
@@ -70,6 +70,7 @@ def _write_summary(sheet: Worksheet, result: SpongeSymResult) -> None:
         (None, None),
         ("Configuration", None),
         ("Variance threshold P", cluster_count.variance_threshold),
+        ("Embedding mode", result.config.embedding_mode),
         ("Tau positive", result.config.tau_positive),
         ("Tau negative", result.config.tau_negative),
         ("Random seed", result.config.random_seed),
@@ -105,7 +106,14 @@ def _write_summary(sheet: Worksheet, result: SpongeSymResult) -> None:
         ("Return basis", result.return_basis),
         (
             "Embedding convention",
-            "K-1 eigenvectors scaled by inverse generalized eigenvalue",
+            (
+                "K smallest generalized eigenvectors used directly"
+                if result.config.embedding_mode == PAPER_TEXT_EMBEDDING
+                else (
+                    "K-1 smallest generalized eigenvectors scaled by "
+                    "inverse generalized eigenvalue"
+                )
+            ),
         ),
         (None, None),
         ("Provenance", None),
@@ -127,7 +135,7 @@ def _write_summary(sheet: Worksheet, result: SpongeSymResult) -> None:
     sheet["A1"].alignment = Alignment(vertical="center")
     sheet.row_dimensions[1].height = 28
 
-    section_rows = (2, 12, 20, 33, 37)
+    section_rows = (2, 12, 21, 34, 38)
     for row in section_rows:
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
         sheet.cell(row, 1).fill = SECTION_FILL
@@ -200,14 +208,14 @@ def _write_eigenvalues(sheet: Worksheet, result: SpongeSymResult) -> None:
         [
             "Rank",
             "Generalized Eigenvalue",
-            "Inverse Eigenvalue Weight",
+            "Embedding Weight",
             "Final Residual Norm",
         ]
     )
     for rank, values in enumerate(
         zip(
             result.generalized_eigenvalues,
-            result.inverse_eigenvalue_weights,
+            result.embedding_weights,
             result.generalized_eigen_residuals,
             strict=True,
         ),

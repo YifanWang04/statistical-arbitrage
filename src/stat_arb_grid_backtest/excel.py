@@ -842,6 +842,7 @@ def _write_audit(sheet: Worksheet, result: GridBacktestResult) -> None:
         ("K estimation window", result.cluster_count_estimation_window, "sessions", "Grid fixed setting", "Independent of actual clustering w"),
         ("Initial NAV", result.config.initial_nav, "NAV units", "GridBacktestConfig", "Scale only"),
         ("Annualization", result.config.annualization_sessions, "sessions", "GridBacktestConfig", "Risk-free and cash return are zero"),
+        ("SPONGE embedding mode", result.sponge_config.embedding_mode, "mode", "SpongeSymConfig", "Fixed across runs"),
         ("tau positive", result.sponge_config.tau_positive, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
         ("tau negative", result.sponge_config.tau_negative, "SPONGE", "SpongeSymConfig", "Fixed across runs"),
         ("Random seed", result.sponge_config.random_seed, "integer", "SpongeSymConfig", "Fixed across runs"),

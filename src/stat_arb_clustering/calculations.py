@@ -11,10 +11,16 @@ from sklearn.exceptions import ConvergenceWarning
 
 from stat_arb_preprocessing import PreprocessingSnapshot
 
-from .models import SpongeSymConfig, SpongeSymQuality, SpongeSymResult
+from .models import (
+    SIGNET_COMPAT_EMBEDDING,
+    SpongeSymConfig,
+    SpongeSymQuality,
+    SpongeSymResult,
+)
 
 
-CALCULATION_VERSION = "sponge_sym_signet_compat_v1"
+CALCULATION_VERSION = "sponge_sym_paper_text_v1"
+SIGNET_COMPAT_CALCULATION_VERSION = "sponge_sym_signet_compat_v1"
 CORRELATION_TOLERANCE = 1e-12
 EIGENVALUE_EPSILON = 1e-12
 SIGNET_ZERO_DEGREE_FLOOR = 1.0 / 999_999_999.0
@@ -55,10 +61,16 @@ def cluster_sponge_sym(
         negative_degrees,
     )
 
-    if k == 1:
+    signet_compat = sponge_config.embedding_mode == SIGNET_COMPAT_EMBEDDING
+    calculation_version = (
+        SIGNET_COMPAT_CALCULATION_VERSION
+        if signet_compat
+        else CALCULATION_VERSION
+    )
+    if signet_compat and k == 1:
         labels = np.zeros(size, dtype=int)
         eigenvalues = np.empty(0, dtype=float)
-        inverse_weights = np.empty(0, dtype=float)
+        embedding_weights = np.empty(0, dtype=float)
         residuals = np.empty(0, dtype=float)
         embedding_values = np.empty((size, 0), dtype=float)
         inertia = 0.0
@@ -75,17 +87,11 @@ def cluster_sponge_sym(
         eigenvalues, eigenvectors = _smallest_generalized_eigenpairs(
             numerator,
             denominator,
-            k - 1,
+            k - 1 if signet_compat else k,
             random_state,
         )
         if not bool(np.isfinite(eigenvalues).all()):
             raise RuntimeError("generalized eigenvalues contain non-finite values")
-        if bool(np.any(eigenvalues <= EIGENVALUE_EPSILON)):
-            smallest = float(np.min(eigenvalues))
-            raise RuntimeError(
-                "generalized eigenvalue cannot be safely inverted: "
-                f"minimum value {smallest}"
-            )
 
         residuals = _generalized_eigen_residuals(
             numerator,
@@ -93,8 +99,20 @@ def cluster_sponge_sym(
             eigenvalues,
             eigenvectors,
         )
-        inverse_weights = 1.0 / eigenvalues
-        embedding_values = eigenvectors * inverse_weights[np.newaxis, :]
+        if signet_compat:
+            if bool(np.any(eigenvalues <= EIGENVALUE_EPSILON)):
+                smallest = float(np.min(eigenvalues))
+                raise RuntimeError(
+                    "generalized eigenvalue cannot be safely inverted: "
+                    f"minimum value {smallest}"
+                )
+            embedding_weights = 1.0 / eigenvalues
+            embedding_values = (
+                eigenvectors * embedding_weights[np.newaxis, :]
+            )
+        else:
+            embedding_weights = np.ones_like(eigenvalues)
+            embedding_values = eigenvectors.copy()
         if not bool(np.isfinite(embedding_values).all()):
             raise RuntimeError("spectral embedding contains non-finite values")
 
@@ -172,14 +190,14 @@ def cluster_sponge_sym(
         clustering_correlation_window=snapshot.correlation_window,
         return_basis=snapshot.return_basis,
         source_calculation_version=snapshot.calculation_version,
-        calculation_version=CALCULATION_VERSION,
+        calculation_version=calculation_version,
         requested_cluster_count=k,
         tickers=tickers,
         market_cap_ranks=ranks,
         cluster_labels=tuple(map(int, labels)),
         cluster_sizes=tuple(map(int, cluster_sizes_array)),
         generalized_eigenvalues=tuple(map(float, eigenvalues)),
-        inverse_eigenvalue_weights=tuple(map(float, inverse_weights)),
+        embedding_weights=tuple(map(float, embedding_weights)),
         generalized_eigen_residuals=tuple(map(float, residuals)),
         positive_degrees=tuple(map(float, positive_degrees)),
         negative_degrees=tuple(map(float, negative_degrees)),

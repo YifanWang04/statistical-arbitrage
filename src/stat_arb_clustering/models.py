@@ -9,6 +9,14 @@ import pandas as pd
 from stat_arb_cluster_count import ClusterCountResult
 
 
+PAPER_TEXT_EMBEDDING = "paper_text"
+SIGNET_COMPAT_EMBEDDING = "signet_compat"
+SUPPORTED_EMBEDDING_MODES = (
+    PAPER_TEXT_EMBEDDING,
+    SIGNET_COMPAT_EMBEDDING,
+)
+
+
 @dataclass(frozen=True)
 class SpongeSymConfig:
     tau_positive: float = 1.0
@@ -16,6 +24,7 @@ class SpongeSymConfig:
     random_seed: int = 0
     kmeans_n_init: int = 10
     kmeans_max_iter: int = 300
+    embedding_mode: str = PAPER_TEXT_EMBEDDING
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -43,6 +52,11 @@ class SpongeSymConfig:
         ):
             raise ValueError(
                 "random_seed must be an integer between 0 and 2**32 - 1"
+            )
+        if self.embedding_mode not in SUPPORTED_EMBEDDING_MODES:
+            raise ValueError(
+                "embedding_mode must be one of "
+                f"{', '.join(SUPPORTED_EMBEDDING_MODES)}"
             )
 
 
@@ -80,7 +94,7 @@ class SpongeSymResult:
     cluster_labels: tuple[int, ...]
     cluster_sizes: tuple[int, ...]
     generalized_eigenvalues: tuple[float, ...]
-    inverse_eigenvalue_weights: tuple[float, ...]
+    embedding_weights: tuple[float, ...]
     generalized_eigen_residuals: tuple[float, ...]
     positive_degrees: tuple[float, ...]
     negative_degrees: tuple[float, ...]

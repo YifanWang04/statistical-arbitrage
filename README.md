@@ -18,7 +18,7 @@ Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
 | 1. Data | 已完成 | Yahoo 行情、历史股数、SPY、逐日动态前 500 股票池、DuckDB |
 | 2. Data Pre-Processing | 已完成 | 60 日 beta、市场残差收益、5 日相关矩阵快照 |
 | 3. Number of Clusters K | 已完成 | 20 日相关矩阵、累计方差解释率 90% |
-| 4. Clustering | 已完成 | `SPONGE_sym` SigNet 兼容 embedding、k-means++ |
+| 4. Clustering | 已完成 | `SPONGE_sym` 论文文字 embedding、k-means++ |
 | 5. Identify Stocks | 已完成 | previous winner / loser / neutral |
 | 6. Assign Weights | 已完成 | 单决策日、只做多、cluster 等额度 |
 | 7. Backtest & Rebalance | 已完成 | 固定份额持仓、`l=3`、复利 `q=5%`、SPY 与无成本绩效评价 |
@@ -35,11 +35,11 @@ Yahoo 数据 → 动态股票池 → beta / 市场残差收益 → 动态 K
 | 收益 | 拆股和股息调整后收益 | Yahoo `Close` 价格收益，拆股尺度一致、不含股息 |
 | FF12 | 有行业标签 | `ff12_code` 暂为空 |
 | 动态 K | 论文动态方法 | 20 日残差相关矩阵，累计解释率 90% |
-| SPONGE embedding | 论文文字：K 个原始特征向量 | 作者 notebook/SigNet 兼容：K-1 个向量并除以特征值 |
+| SPONGE embedding | 论文文字：K 个原始特征向量 | 默认相同；旧 SigNet 兼容模式可显式选择 |
 | 信号阈值 p | `0` | CLI 与 IDE 脚本默认 `0.05` |
 | 组合 | 做多 losers、做空 winners | 只做多 losers |
 
-因此，当前结果应称为 **Yahoo Approximate Price-Return、SigNet-compatible、Long-only 项目口径**。严格论文复刻仍需要历史证券主表（如 CRSP/WRDS）、含股息收益及论文多空组合。
+因此，当前结果应称为 **Yahoo Approximate Price-Return、Paper-text SPONGE、Long-only 项目口径**。严格论文复刻仍需要历史证券主表（如 CRSP/WRDS）、含股息收益及论文多空组合。
 
 ## 安装
 
@@ -174,6 +174,7 @@ K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= 0.90 }
   --clustering-correlation-window 5 `
   --cluster-count-estimation-window 20 `
   --variance-threshold 0.90 `
+  --embedding-mode paper_text `
   --tau-positive 1 `
   --tau-negative 1 `
   --seed 0 `
@@ -181,14 +182,14 @@ K = min { k : sum(lambda[1:k]) / sum(lambda[1:N]) >= 0.90 }
   --output outputs\step4_clustering\sponge_sym_clusters_2026-07-17.xlsx
 ```
 
-当前计算版本为 `sponge_sym_signet_compat_v1`：
+默认计算版本为 `sponge_sym_paper_text_v1`：
 
 ```text
-eigenvector_count = K - 1
-embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
+eigenvector_count = K
+embedding[:, j] = generalized_eigenvector[:, j]
 ```
 
-这与论文文字描述的 K 维原始特征向量口径不同，但与作者 notebook 调用的旧 SigNet 行为兼容。随机种子和 `n_init` 被显式固定以保证可复现。
+这与论文第 2.1.3 节的 K 维原始特征向量文字口径一致。为复现历史结果，仍可显式设置 `embedding_mode="signet_compat"`（CLI 使用 `--embedding-mode signet_compat`）；该模式继续使用 K-1 个向量并除以对应特征值，计算版本为 `sponge_sym_signet_compat_v1`。随机种子和 `n_init` 被显式固定以保证可复现。
 
 Excel 工作表：
 
@@ -405,7 +406,7 @@ Excel 默认采用结论优先的精简视图：`Summary` 集中展示运行概�
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-截至 2026-07-31，共 110 项测试，全部通过。测试覆盖：
+截至 2026-07-31，共 111 项测试，全部通过。测试覆盖：
 
 - 数据库失败安全发布、空股票池拒绝发布和 catalog 升级；
 - Yahoo 字段规范化、普通股近似过滤和拆股处理；
@@ -450,10 +451,10 @@ outputs/                       Excel 研究输出
 - Yahoo 普通股筛选和发行人标识都是近似值；
 - 当前收益不含股息，与论文数据口径不同；
 - FF12 尚未填充；
-- 当前 SPONGE embedding 是作者代码兼容口径，不是论文文字口径；
+- 当前默认 SPONGE embedding 是论文文字口径；2026-07-31 前导出的历史结果可能仍是旧 SigNet 兼容口径，比较前应核对 `Clustering version`；
 - `p=5%` 和只做多均为项目修改；
 - 回测尚未加入交易成本、滑点、融资利息和正现金收益；
 - 缺价使用冻结及按新目标决定恢复持有/清算的规则，但 Yahoo 不提供可靠的历史退市收益，因此永久退市风险仍无法严格复刻；
 - FF12 基准尚未实现。
 
-第七步是 **Yahoo Approximate Price-Return、SigNet-compatible、Long-only、No-cost** 项目基线，不应与论文的 CRSP 多空市场中性结果直接等同。交易成本、滑点和 FF12 应作为后续独立口径加入并保留无成本对照。
+第七步是 **Yahoo Approximate Price-Return、Paper-text SPONGE、Long-only、No-cost** 项目基线，不应与论文的 CRSP 多空市场中性结果直接等同。交易成本、滑点和 FF12 应作为后续独立口径加入并保留无成本对照。

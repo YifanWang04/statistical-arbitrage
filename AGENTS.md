@@ -92,19 +92,27 @@
 
 ### 3.4 SPONGE_sym
 
-当前实现采用用户已确认的作者 notebook / 旧 SigNet 兼容口径：
+自 2026-07-31 起，当前默认实现按用户确认切换为论文第 2.1.3 节文字口径：
+
+```text
+eigenvector_count = K
+embedding[:, j] = generalized_eigenvector[:, j]
+```
+
+旧作者 notebook / SigNet 兼容口径保留为显式 `embedding_mode="signet_compat"`：
 
 ```text
 eigenvector_count = K - 1
 embedding[:, j] = generalized_eigenvector[:, j] / eigenvalue[j]
 ```
 
-这不同于论文第 2.1.3 节文字所述的“K 个最小广义特征向量直接组成 K 维 embedding”。不得把当前结果称为纯论文文字基线。未来若实现论文口径，应使用独立计算版本并做对照实验。
+默认论文文字版本为 `sponge_sym_paper_text_v1`；旧兼容版本为 `sponge_sym_signet_compat_v1`。两种模式会产生不同 clusters、信号和回测结果，比较历史 Excel 前必须核对 `Clustering version`，不得混合归因。
 
 当前默认：
 
 - `tau_positive=1`；
 - `tau_negative=1`；
+- `embedding_mode="paper_text"`；
 - `random_seed=0`；
 - `kmeans_n_init=10`；
 - cluster ID 从 `0` 开始，数字标签没有跨日期的经济含义。
@@ -239,7 +247,7 @@ DuckDB 持久化：
   .\.venv\Scripts\python.exe -m unittest discover -s tests -v
   ```
 
-截至 2026-07-31，测试套件共有 110 项，全部通过。
+截至 2026-07-31，测试套件共有 111 项，全部通过。
 
 ## 7. 后续阶段的待确认清单
 
