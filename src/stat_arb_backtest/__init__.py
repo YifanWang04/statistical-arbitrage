@@ -14,10 +14,15 @@ from .application import (
     target_from_portfolio_weights,
 )
 from .excel import export_backtest_workbook
+from .naming import (
+    backtest_parameter_suffix,
+    default_backtest_output_path,
+)
 from .models import (
     MISSING_PRICE_POLICY_FREEZE,
     BacktestConfig,
     BacktestMarketData,
+    BacktestResearchAudit,
     BacktestResult,
     BacktestTarget,
     DailyPerformance,
@@ -37,6 +42,7 @@ __all__ = [
     "MISSING_PRICE_POLICY_FREEZE",
     "BacktestConfig",
     "BacktestMarketData",
+    "BacktestResearchAudit",
     "BacktestResult",
     "BacktestTarget",
     "DailyPerformance",
@@ -50,6 +56,8 @@ __all__ = [
     "TradeRecord",
     "calculate_period_performance",
     "calculate_performance_metrics",
+    "backtest_parameter_suffix",
+    "default_backtest_output_path",
     "export_backtest_report",
     "export_backtest_workbook",
     "required_prior_sessions_for_signals",

@@ -22,6 +22,7 @@ from .application import (
     export_backtest_report,
 )
 from .models import BacktestConfig
+from .naming import default_backtest_output_path
 
 
 def _date(value: str) -> date:
@@ -130,9 +131,14 @@ def main(argv: list[str] | None = None) -> int:
             random_seed=args.seed,
             kmeans_n_init=args.n_init,
         )
-        output = args.output or Path(
-            "outputs/step7_backtest/"
-            f"backtest_{args.start_date.isoformat()}_{args.end_date.isoformat()}.xlsx"
+        output = args.output or default_backtest_output_path(
+            args.start_date,
+            args.end_date,
+            lookback_window=selection_config.lookback_window,
+            deviation_threshold=selection_config.deviation_threshold,
+            variance_threshold=args.variance_threshold,
+            rebalance_period=backtest_config.rebalance_period,
+            take_profit_threshold=backtest_config.take_profit_threshold,
         )
         result, exported = export_backtest_report(
             preprocessing_config,

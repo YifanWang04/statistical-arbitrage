@@ -126,3 +126,35 @@ class BacktestMarketDataRepository:
             sessions=tuple(sessions),
             closes=close_matrix,
         )
+
+    def find_data_pipeline_run_id(
+        self,
+        preprocessing_run_id: str,
+    ) -> str | None:
+        """Return the completed data run visible to a preprocessing run."""
+        with duckdb.connect(str(self.database_path), read_only=True) as connection:
+            preprocessing_row = connection.execute(
+                """
+                SELECT started_at
+                FROM audit.preprocessing_runs
+                WHERE run_id = ?
+                """,
+                [preprocessing_run_id],
+            ).fetchone()
+            if preprocessing_row is None:
+                raise ValueError(
+                    "preprocessing run is missing from the audit catalog: "
+                    f"{preprocessing_run_id}"
+                )
+            pipeline_row = connection.execute(
+                """
+                SELECT run_id
+                FROM audit.pipeline_runs
+                WHERE status = 'completed'
+                  AND completed_at <= ?
+                ORDER BY completed_at DESC, run_id DESC
+                LIMIT 1
+                """,
+                [preprocessing_row[0]],
+            ).fetchone()
+        return None if pipeline_row is None else str(pipeline_row[0])

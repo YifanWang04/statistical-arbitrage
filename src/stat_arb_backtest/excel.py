@@ -177,12 +177,6 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
         (
             "Return sessions",
             strategy.session_count,
-            "Rebalance period",
-            f"{config.rebalance_period} sessions",
-        ),
-        (
-            "Take-profit threshold",
-            config.take_profit_threshold,
             "Initial NAV",
             config.initial_nav,
         ),
@@ -206,8 +200,7 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
         sheet.cell(row_number, 3).font = Font(bold=True)
     sheet["B13"].number_format = "yyyy-mm-dd"
     sheet["D13"].number_format = "yyyy-mm-dd"
-    sheet["B15"].number_format = PERCENT_FORMAT
-    sheet["D15"].number_format = NAV_FORMAT
+    sheet["D14"].number_format = NAV_FORMAT
 
     _write_summary_section(sheet, 19, "Audit and QC")
     audit_rows = (
@@ -258,7 +251,111 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
         )
         cell.fill = OK_FILL if status == "OK" else CHECK_FILL
 
-    _write_summary_section(sheet, 26, "Time semantics and research scope")
+    audit = result.research_audit
+    _write_summary_section(sheet, 26, "Core input parameters (w, p, P, l, q)")
+    core_input_rows = (
+        (
+            "Lookback window (w)",
+            "not captured" if audit is None else audit.selection_lookback_window,
+            "Deviation threshold (p)",
+            "not captured" if audit is None else audit.deviation_threshold,
+        ),
+        (
+            "Variance threshold (P)",
+            "not captured" if audit is None else audit.variance_threshold,
+            "Rebalance period (l)",
+            config.rebalance_period,
+        ),
+        (
+            "Take-profit threshold (q)",
+            config.take_profit_threshold,
+            None,
+            None,
+        ),
+    )
+    for row_number, values in enumerate(core_input_rows, start=27):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, value=value)
+        sheet.cell(row_number, 1).font = Font(bold=True)
+        if values[2] is not None:
+            sheet.cell(row_number, 3).font = Font(bold=True)
+    if audit is not None:
+        sheet["D27"].number_format = PERCENT_FORMAT
+        sheet["B28"].number_format = PERCENT_FORMAT
+    sheet["B29"].number_format = PERCENT_FORMAT
+
+    _write_summary_section(sheet, 31, "Signal provenance")
+    if audit is None:
+        research_rows = (
+            (
+                "Research audit metadata",
+                "not captured; use run_backtest/export_backtest_report",
+                None,
+                None,
+            ),
+        )
+    else:
+        research_rows = (
+            (
+                "K estimation window",
+                audit.cluster_count_estimation_window,
+                "Cluster-count version",
+                audit.cluster_count_calculation_version,
+            ),
+            (
+                "SPONGE embedding mode",
+                audit.embedding_mode,
+                "Clustering version",
+                audit.clustering_calculation_version,
+            ),
+            (
+                "tau positive",
+                audit.tau_positive,
+                "tau negative",
+                audit.tau_negative,
+            ),
+            (
+                "Random seed",
+                audit.random_seed,
+                "k-means n_init",
+                audit.kmeans_n_init,
+            ),
+            (
+                "k-means max_iter",
+                audit.kmeans_max_iter,
+                "Preprocessing version",
+                audit.preprocessing_calculation_version,
+            ),
+            (
+                "Data pipeline run id",
+                audit.data_pipeline_run_id or "not available",
+                "Preprocessing run id",
+                audit.preprocessing_run_id,
+            ),
+            (
+                "Stock-selection version",
+                audit.stock_selection_calculation_version,
+                "Portfolio-weight version",
+                audit.portfolio_weight_calculation_version,
+            ),
+        )
+    for row_number, values in enumerate(research_rows, start=32):
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, value=value)
+        sheet.cell(row_number, 1).font = Font(bold=True)
+        if values[2] is not None:
+            sheet.cell(row_number, 3).font = Font(bold=True)
+    time_semantics_row = 33 + len(research_rows)
+    _write_summary_section(
+        sheet,
+        time_semantics_row,
+        "Time semantics and research scope",
+    )
+    deviation_scope = (
+        "not captured"
+        if audit is None
+        else f"{audit.deviation_threshold:.4%}"
+    )
     notes = (
         (
             "Time semantics",
@@ -271,7 +368,7 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
         ),
         (
             "Strategy scope",
-            "Yahoo Close price return; p=5%; long-only losers; "
+            f"Yahoo Close price return; p={deviation_scope}; long-only losers; "
             "capital is split equally across active clusters; "
             "cash return and risk-free rate are zero",
         ),
@@ -286,7 +383,10 @@ def _write_summary(sheet: Worksheet, result: BacktestResult) -> None:
             "https://github.com/maxclchen/Correlation-Matrix-Clustering-for-Statistical-Arbitrage-Portfolios",
         ),
     )
-    for row_number, (label, value) in enumerate(notes, start=27):
+    for row_number, (label, value) in enumerate(
+        notes,
+        start=time_semantics_row + 1,
+    ):
         sheet.cell(row_number, 1, value=label).font = Font(bold=True)
         sheet.merge_cells(
             start_row=row_number,

@@ -276,6 +276,27 @@ class PeriodPerformance:
 
 
 @dataclass(frozen=True)
+class BacktestResearchAudit:
+    cluster_count_estimation_window: int
+    variance_threshold: float
+    selection_lookback_window: int
+    deviation_threshold: float
+    tau_positive: float
+    tau_negative: float
+    embedding_mode: str
+    random_seed: int
+    kmeans_n_init: int
+    kmeans_max_iter: int
+    preprocessing_run_id: str
+    data_pipeline_run_id: str | None
+    preprocessing_calculation_version: str
+    cluster_count_calculation_version: str
+    clustering_calculation_version: str
+    stock_selection_calculation_version: str
+    portfolio_weight_calculation_version: str
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     config: BacktestConfig
     daily_performance: tuple[DailyPerformance, ...]
@@ -288,3 +309,4 @@ class BacktestResult:
     strategy_metrics: PerformanceMetrics
     spy_metrics: PerformanceMetrics
     calculation_version: str
+    research_audit: BacktestResearchAudit | None = None

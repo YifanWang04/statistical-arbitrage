@@ -17,13 +17,17 @@ from stat_arb_backtest import (
     TargetWeight,
     calculate_period_performance,
     calculate_performance_metrics,
+    backtest_parameter_suffix,
+    default_backtest_output_path,
     export_backtest_workbook,
     run_backtest,
     simulate_backtest,
 )
 from stat_arb_backtest.cli import build_parser
 from stat_arb_backtest.repository import BacktestMarketDataRepository
+from stat_arb_clustering import SpongeSymConfig
 from stat_arb_preprocessing import PreprocessingConfig, build_preprocessing
+from stat_arb_stock_selection import StockSelectionConfig
 from tests.test_preprocessing import build_test_database
 
 
@@ -781,6 +785,107 @@ class BacktestCalculationTests(unittest.TestCase):
 
 
 class BacktestIntegrationTests(unittest.TestCase):
+    def test_exported_summary_audits_actual_signal_config_and_run_ids(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database, dates = build_test_database(Path(directory))
+            add_close_prices(database)
+            with duckdb.connect(str(database)) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO audit.pipeline_runs VALUES (
+                        'pipeline-test-run',
+                        '2019-12-01T00:00:00Z',
+                        '2019-12-02T00:00:00Z',
+                        'completed',
+                        'test',
+                        '2020-01-01',
+                        '2020-12-31',
+                        500,
+                        'test_candidates',
+                        'test provenance'
+                    )
+                    """
+                )
+            preprocessing_config = PreprocessingConfig(
+                database_path=database,
+                beta_window=40,
+                correlation_window=5,
+            )
+            build_preprocessing(preprocessing_config)
+            sessions = tuple(value.date() for value in dates[-4:])
+
+            result = run_backtest(
+                preprocessing_config,
+                BacktestConfig(
+                    start_date=sessions[0],
+                    end_date=sessions[-1],
+                    take_profit_threshold=1.0,
+                ),
+                cluster_count_estimation_window=20,
+                variance_threshold=0.85,
+                sponge_config=SpongeSymConfig(
+                    tau_positive=2.0,
+                    tau_negative=3.0,
+                    random_seed=7,
+                    kmeans_n_init=4,
+                    kmeans_max_iter=123,
+                    embedding_mode="paper_text",
+                ),
+                selection_config=StockSelectionConfig(
+                    lookback_window=5,
+                    deviation_threshold=0.03,
+                ),
+            )
+
+            output = Path(directory) / "audited_backtest.xlsx"
+            export_backtest_workbook(result, output)
+            workbook = load_workbook(output, data_only=True, read_only=False)
+            summary = workbook["Summary"]
+            audit_values = {}
+            for row in range(1, summary.max_row + 1):
+                for label_column, value_column in ((1, 2), (3, 4)):
+                    label = summary.cell(row, label_column).value
+                    if label is not None:
+                        audit_values[label] = summary.cell(row, value_column).value
+
+            self.assertAlmostEqual(audit_values["Deviation threshold (p)"], 0.03)
+            self.assertAlmostEqual(audit_values["Variance threshold (P)"], 0.85)
+            self.assertEqual(audit_values["Lookback window (w)"], 5)
+            self.assertEqual(audit_values["Rebalance period (l)"], 3)
+            self.assertAlmostEqual(
+                audit_values["Take-profit threshold (q)"],
+                1.0,
+            )
+            self.assertEqual(audit_values["K estimation window"], 20)
+            self.assertEqual(audit_values["SPONGE embedding mode"], "paper_text")
+            self.assertAlmostEqual(audit_values["tau positive"], 2.0)
+            self.assertAlmostEqual(audit_values["tau negative"], 3.0)
+            self.assertEqual(audit_values["Random seed"], 7)
+            self.assertEqual(audit_values["k-means n_init"], 4)
+            self.assertEqual(audit_values["k-means max_iter"], 123)
+            self.assertEqual(
+                audit_values["Data pipeline run id"],
+                "pipeline-test-run",
+            )
+            self.assertIsNotNone(result.research_audit)
+            assert result.research_audit is not None
+            self.assertEqual(
+                audit_values["Preprocessing run id"],
+                result.research_audit.preprocessing_run_id,
+            )
+            self.assertEqual(
+                audit_values["Clustering version"],
+                "sponge_sym_paper_text_v1",
+            )
+            self.assertEqual(
+                audit_values["Preprocessing version"],
+                "paper_baseline_v1",
+            )
+            self.assertIn("p=3.0000%", audit_values["Strategy scope"])
+            workbook.close()
+
     def test_market_data_rolls_start_past_first_close_without_a_prior_close(
         self,
     ) -> None:
@@ -996,6 +1101,15 @@ class BacktestIntegrationTests(unittest.TestCase):
                 summary["B7"].value,
                 result.strategy_metrics.total_return,
             )
+            self.assertEqual(
+                summary["A26"].value,
+                "Core input parameters (w, p, P, l, q)",
+            )
+            self.assertEqual(summary["B27"].value, "not captured")
+            self.assertEqual(summary["D27"].value, "not captured")
+            self.assertEqual(summary["B28"].value, "not captured")
+            self.assertEqual(summary["D28"].value, 3)
+            self.assertAlmostEqual(summary["B29"].value, 0.05)
             periods = workbook["Period_Performance"]
             self.assertEqual(periods["A4"].value, "Annual Performance")
             self.assertEqual(periods["A5"].value, "Period")
@@ -1223,6 +1337,33 @@ class BacktestIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(args.deviation_threshold, 0.05)
         self.assertEqual(args.lookback_window, 5)
         self.assertFalse(args.no_progress)
+
+    def test_default_output_name_contains_all_five_core_parameters(self) -> None:
+        suffix = backtest_parameter_suffix(
+            lookback_window=5,
+            deviation_threshold=0.03,
+            variance_threshold=0.85,
+            rebalance_period=3,
+            take_profit_threshold=0.05,
+        )
+        output = default_backtest_output_path(
+            date(2026, 1, 5),
+            date(2026, 1, 9),
+            lookback_window=5,
+            deviation_threshold=0.03,
+            variance_threshold=0.85,
+            rebalance_period=3,
+            take_profit_threshold=0.05,
+        )
+
+        self.assertEqual(suffix, "_w5p3P85l3q5")
+        self.assertEqual(
+            output,
+            Path(
+                "outputs/step7_backtest/"
+                "backtest_2026-01-05_2026-01-09_w5p3P85l3q5.xlsx"
+            ),
+        )
 
 
 def add_close_prices(database: Path) -> None:

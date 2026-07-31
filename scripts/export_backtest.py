@@ -3,7 +3,11 @@
 from datetime import date
 from pathlib import Path
 
-from stat_arb_backtest import BacktestConfig, export_backtest_report
+from stat_arb_backtest import (
+    BacktestConfig,
+    default_backtest_output_path,
+    export_backtest_report,
+)
 from stat_arb_cluster_count import (
     DEFAULT_CLUSTER_COUNT_ESTIMATION_WINDOW,
     DEFAULT_VARIANCE_THRESHOLD,
@@ -18,7 +22,7 @@ from stat_arb_stock_selection import StockSelectionConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = PROJECT_ROOT / "data" / "yahoo_market_data.duckdb"
-START_DATE = date(2020, 1, 1)
+START_DATE = date(2023, 1, 1)
 END_DATE = date(2026, 7, 30)
 ## w window for correlation matrix calculation, used in clustering and stock selection
 LOOKBACK_WINDOW = 5
@@ -38,11 +42,15 @@ TAU_POSITIVE = 1.0
 TAU_NEGATIVE = 1.0
 RANDOM_SEED = 0
 KMEANS_N_INIT = 10
-OUTPUT_PATH = (
-    PROJECT_ROOT
-    / "outputs"
-    / "step7_backtest"
-    / f"backtest_{START_DATE.isoformat()}_{END_DATE.isoformat()}.xlsx"
+OUTPUT_PATH = default_backtest_output_path(
+    START_DATE,
+    END_DATE,
+    lookback_window=LOOKBACK_WINDOW,
+    deviation_threshold=DEVIATION_THRESHOLD,
+    variance_threshold=VARIANCE_THRESHOLD,
+    rebalance_period=REBALANCE_PERIOD,
+    take_profit_threshold=TAKE_PROFIT_THRESHOLD,
+    output_directory=PROJECT_ROOT / "outputs" / "step7_backtest",
 )
 REPLACE_EXISTING = True
 SHOW_PROGRESS = True
